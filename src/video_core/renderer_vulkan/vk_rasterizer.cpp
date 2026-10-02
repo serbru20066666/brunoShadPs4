@@ -18,6 +18,7 @@
 #include "video_core/renderer_vulkan/vk_shader_hle.h"
 #include "video_core/texture_cache/image_view.h"
 #include "video_core/texture_cache/texture_cache.h"
+#include "common/elf_info.h"
 
 namespace Vulkan {
 
@@ -41,6 +42,14 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
       pipeline_cache{instance, scheduler, liverpool, buffer_cache.GetSparsePageShift()},
       host_markers_enabled{EmulatorSettings.IsVkHostMarkersEnabled()},
       guest_markers_enabled{EmulatorSettings.IsVkGuestMarkersEnabled()} {
+    // God of War III Remastered: render without host MSAA (see msaa_override.h).
+    {
+        const auto& serial = Common::ElfInfo::Instance().GameSerial();
+        AmdGpu::g_force_no_msaa = serial == "CUSA01623" || serial == "CUSA01715";
+        if (AmdGpu::g_force_no_msaa) {
+            LOG_INFO(Render_Vulkan, "Host MSAA disabled for {} (GoW3 depth stripes fix)", serial);
+        }
+    }
     if (!EmulatorSettings.IsNullGPU()) {
         liverpool->BindRasterizer(this);
     }
