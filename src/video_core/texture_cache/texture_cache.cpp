@@ -70,22 +70,61 @@ TextureCache::~TextureCache() = default;
 
 void TextureCache::ProcessDownloadImages() {
     std::unique_lock lk{download_images_mutex};
+    if (download_images.empty()) {
+        return;
+    }
+    // Record every copy first and wait for the GPU once, not once per image. (Writing back
+    // asynchronously is not safe: GoW3 reads these images on the CPU right after.)
+    boost::container::small_vector<PendingDownload, 8> pending;
     for (const ImageId image_id : download_images) {
-        DownloadImageMemory(image_id, true);
+        if (auto download = RecordImageDownload(image_id, false)) {
+            pending.push_back(*download);
+        }
     }
     download_images.clear();
+    if (pending.empty()) {
+        return;
+    }
+    scheduler.Finish();
+    for (const auto& [download, device_addr, size] : pending) {
+        download.Invalidate();
+        Core::Memory::Instance()->TryWriteBacking(std::bit_cast<u8*>(device_addr),
+                                                  download.mapped, size);
+    }
 }
 
 void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
+    const auto pending = RecordImageDownload(image_id, !sync);
+    if (!pending) {
+        return;
+    }
+    const auto& [download, device_addr, download_size] = *pending;
+    if (sync) {
+        scheduler.Finish();
+        download.Invalidate();
+        Core::Memory::Instance()->TryWriteBacking(std::bit_cast<u8*>(device_addr),
+                                                  download.mapped, download_size);
+    } else {
+        scheduler.DeferPriorityOperation([this, download, device_addr, download_size] {
+            download.Invalidate();
+            Core::Memory::Instance()->TryWriteBacking(std::bit_cast<u8*>(device_addr),
+                                                      download.mapped, download_size);
+            runtime.GetStagingPool().FreeDeferred(download);
+        });
+    }
+}
+
+std::optional<TextureCache::PendingDownload> TextureCache::RecordImageDownload(ImageId image_id,
+                                                                               bool deferred) {
     Image& image = slot_images[image_id];
     if (False(image.flags & ImageFlagBits::GpuModified)) {
-        return;
+        return std::nullopt;
     }
     const u32 download_size = image.info.pitch * image.info.size.height * image.info.size.depth *
                               image.info.resources.layers * (image.info.num_bits / 8);
     ASSERT(download_size <= image.info.guest_size);
     const auto download =
-        runtime.GetStagingPool().Request(download_size, MemoryType::HostCached, 16, !sync);
+        runtime.GetStagingPool().Request(download_size, MemoryType::HostCached, 16, deferred);
     const vk::BufferImageCopy image_download = {
         .bufferOffset = download.offset,
         .bufferRowLength = image.info.pitch,
@@ -102,20 +141,7 @@ void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
         .imageExtent = {image.info.size.width, image.info.size.height, image.info.size.depth},
     };
     runtime.DownloadImage(&image, download.buffer, std::span{&image_download, 1});
-    if (sync) {
-        scheduler.Finish();
-        download.Invalidate();
-        Core::Memory::Instance()->TryWriteBacking(std::bit_cast<u8*>(image.info.guest_address),
-                                                  download.mapped, download_size);
-    } else {
-        scheduler.DeferPriorityOperation(
-            [this, device_addr = image.info.guest_address, download, download_size] {
-                download.Invalidate();
-                Core::Memory::Instance()->TryWriteBacking(std::bit_cast<u8*>(device_addr),
-                                                          download.mapped, download_size);
-                runtime.GetStagingPool().FreeDeferred(download);
-            });
-    }
+    return PendingDownload{download, image.info.guest_address, download_size};
 }
 
 void TextureCache::MarkAsMaybeDirty(ImageId image_id, Image& image) {

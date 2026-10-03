@@ -3,9 +3,9 @@
 
 // Based on imgui_impl_sdl3.cpp from Dear ImGui repository
 
+#include <cstdio>
 #include <cstdlib>
 #include <imgui.h>
-#include "common/logging/log.h"
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
 #include "core/memory.h"
@@ -843,23 +843,31 @@ void NewFrame(bool is_reusing_frame) {
         frameIdx = (frameIdx + 1) % count;
         DebugState.Framerate = acc > 0.0f ? 1.0f / (acc / (float)count) : FLT_MAX;
 
-        // Opt-in performance log (BRUNO_PERF_LOG=1): every 5 s, average FPS, worst frame
-        // and number of frames over 50 ms, to compare builds and settings objectively.
-        static const bool perf_log = [] {
+        // Opt-in performance log (BRUNO_PERF_LOG=1), written and flushed to perf_log.txt in
+        // the working directory: every 5 s the average FPS, worst frame and frames over 50 ms,
+        // plus a line per hitch, to compare builds and settings objectively.
+        static std::FILE* perf_file = [] () -> std::FILE* {
             const char* env = std::getenv("BRUNO_PERF_LOG");
-            return env && env[0] == '1';
+            return env && env[0] == '1' ? std::fopen("perf_log.txt", "w") : nullptr;
         }();
-        if (perf_log) {
+        if (perf_file) {
             static double window_time = 0.0;
             static float worst = 0.0f;
             static int frames = 0, stutters = 0;
             window_time += deltaTime;
             worst = std::max(worst, deltaTime);
             ++frames;
-            stutters += deltaTime > 0.05f;
+            if (deltaTime > 0.05f) {
+                ++stutters;
+                std::fprintf(perf_file, "hitch %.1f ms at t=%.2fs\n", deltaTime * 1000.0f,
+                             SDL_GetTicks() / 1000.0);
+                std::fflush(perf_file);
+            }
             if (window_time >= 5.0) {
-                LOG_INFO(Render, "PERF avg {:.1f} fps | worst {:.1f} ms | >50ms: {}",
-                         frames / window_time, worst * 1000.0f, stutters);
+                std::fprintf(perf_file, "t=%.0fs avg %.1f fps | worst %.1f ms | >50ms: %d\n",
+                             SDL_GetTicks() / 1000.0, frames / window_time, worst * 1000.0f,
+                             stutters);
+                std::fflush(perf_file);
                 window_time = 0.0;
                 worst = 0.0f;
                 frames = stutters = 0;

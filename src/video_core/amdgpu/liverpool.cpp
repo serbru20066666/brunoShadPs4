@@ -410,7 +410,12 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 break;
             }
             case PM4ItOpcode::SetPredication: {
-                LOG_WARNING(Render, "Unimplemented IT_SET_PREDICATION");
+                // Some games issue this for every draw; logging each one costs real CPU time.
+                static bool logged = false;
+                if (!logged) {
+                    logged = true;
+                    LOG_WARNING(Render, "Unimplemented IT_SET_PREDICATION (logged once)");
+                }
                 break;
             }
             case PM4ItOpcode::IndexType: {
