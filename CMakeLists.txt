@@ -118,7 +118,7 @@ endif()
 # generate git revision information
 include("${CMAKE_CURRENT_SOURCE_DIR}/externals/cmake-modules/GetGitRevisionDescription.cmake")
 get_git_head_revision(GIT_REF_SPEC GIT_REV)
-git_describe(GIT_DESC --always --long --dirty)
+git_describe(GIT_DESC --always --long --dirty --tags)
 git_branch_name(GIT_BRANCH)
 string(TIMESTAMP BUILD_DATE "%Y-%m-%d %H:%M:%S")
 
