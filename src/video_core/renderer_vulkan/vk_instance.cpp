@@ -266,6 +266,17 @@ bool Instance::CreateDevice() {
     // Optional
     maintenance_5 = add_extension(VK_KHR_MAINTENANCE_5_EXTENSION_NAME);
     maintenance_8 = add_extension(VK_KHR_MAINTENANCE_8_EXTENSION_NAME);
+    if (const char* extension = FullScreenExclusiveExtensionName()) {
+        // It builds on an instance extension; only use it if that one is there too.
+        const auto [result, instance_extensions] = vk::enumerateInstanceExtensionProperties();
+        const bool has_capabilities2 =
+            result == vk::Result::eSuccess &&
+            std::ranges::any_of(instance_extensions, [](const auto& prop) {
+                return std::string_view{prop.extensionName} ==
+                       VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME;
+            });
+        full_screen_exclusive = has_capabilities2 && add_extension(extension);
+    }
     attachment_feedback_loop = add_extension(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME);
     if (attachment_feedback_loop) {
         attachment_feedback_loop =

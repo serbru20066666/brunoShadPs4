@@ -3,15 +3,21 @@
 
 #include <algorithm>
 #include <limits>
+#include <SDL3/SDL_video.h>
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "core/emulator_settings.h"
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_platform.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 
 namespace Vulkan {
+
+// Only named by the Vulkan C++ headers when built for a platform that has it.
+static constexpr auto RESULT_EXCLUSIVE_LOST =
+    static_cast<vk::Result>(VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT);
 
 static constexpr vk::SurfaceFormatKHR SURFACE_FORMAT_HDR = {
     .format = vk::Format::eA2B10G10R10UnormPack32,
@@ -70,13 +76,34 @@ void Swapchain::Create(u32 width_, u32 height_) {
         .oldSwapchain = nullptr,
     };
 
-    auto [swapchain_result, chain] = instance.GetDevice().createSwapchainKHR(swapchain_info);
+    // Frame generation and other driver features only engage in exclusive full screen; a
+    // window that covers the screen does not count as that.
+    exclusive_wanted = instance.IsFullScreenExclusiveSupported() &&
+                       EmulatorSettings.GetFullScreenMode() == "Fullscreen" &&
+                       (SDL_GetWindowFlags(window.GetSDLWindow()) & SDL_WINDOW_FULLSCREEN) != 0;
+    exclusive_acquired = false;
+
+    auto [swapchain_result, chain] =
+        exclusive_wanted ? CreateExclusiveSwapchain(instance.GetDevice(), swapchain_info, window)
+                         : instance.GetDevice().createSwapchainKHR(swapchain_info);
     ASSERT_MSG(swapchain_result == vk::Result::eSuccess, "Failed to create swapchain: {}",
                vk::to_string(swapchain_result));
     swapchain = chain;
 
     SetupImages();
     RefreshSemaphores();
+    AcquireExclusiveFullScreen();
+}
+
+void Swapchain::AcquireExclusiveFullScreen() {
+    if (!exclusive_wanted || exclusive_acquired) {
+        return;
+    }
+    const auto result = AcquireFullScreenExclusive(instance.GetDevice(), swapchain);
+    exclusive_acquired = result == vk::Result::eSuccess;
+    if (exclusive_acquired) {
+        LOG_INFO(Render_Vulkan, "Exclusive full screen acquired");
+    }
 }
 
 void Swapchain::Recreate(u32 width_, u32 height_) {
@@ -103,6 +130,11 @@ void Swapchain::SetHDR(bool hdr) {
 }
 
 bool Swapchain::AcquireNextImage() {
+    // Exclusive full screen is refused while the window is not in front: keep trying.
+    if (exclusive_wanted && !exclusive_acquired && ++exclusive_retry % 60 == 0) {
+        AcquireExclusiveFullScreen();
+    }
+
     vk::Device device = instance.GetDevice();
     vk::Result result =
         device.acquireNextImageKHR(swapchain, std::numeric_limits<u64>::max(),
@@ -115,6 +147,7 @@ bool Swapchain::AcquireNextImage() {
     case vk::Result::eErrorSurfaceLostKHR:
     case vk::Result::eErrorOutOfDateKHR:
     case vk::Result::eErrorUnknown:
+    case RESULT_EXCLUSIVE_LOST:
         needs_recreation = true;
         break;
     default:
@@ -137,7 +170,8 @@ bool Swapchain::Present() {
     };
 
     auto result = instance.GetPresentQueue().presentKHR(present_info);
-    if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR) {
+    if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR ||
+        result == RESULT_EXCLUSIVE_LOST) {
         needs_recreation = true;
     } else {
         ASSERT_MSG(result == vk::Result::eSuccess, "Swapchain presentation failed: {}",

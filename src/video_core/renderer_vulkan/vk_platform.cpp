@@ -155,6 +155,41 @@ static auto GetLayerExtensions(std::vector<const char*>&& extensions,
     return extensions;
 }
 
+const char* FullScreenExclusiveExtensionName() {
+#if defined(VK_USE_PLATFORM_WIN32_KHR)
+    return VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME;
+#else
+    return nullptr;
+#endif
+}
+
+vk::ResultValue<vk::SwapchainKHR> CreateExclusiveSwapchain(
+    vk::Device device, vk::SwapchainCreateInfoKHR swapchain_info,
+    const Frontend::WindowSDL& emu_window) {
+#if defined(VK_USE_PLATFORM_WIN32_KHR)
+    vk::SurfaceFullScreenExclusiveWin32InfoEXT monitor_info = {
+        .hmonitor = MonitorFromWindow(static_cast<HWND>(emu_window.GetWindowInfo().render_surface),
+                                      MONITOR_DEFAULTTONEAREST),
+    };
+    const vk::SurfaceFullScreenExclusiveInfoEXT exclusive_info = {
+        .pNext = &monitor_info,
+        .fullScreenExclusive = vk::FullScreenExclusiveEXT::eApplicationControlled,
+    };
+    swapchain_info.pNext = &exclusive_info;
+    return device.createSwapchainKHR(swapchain_info);
+#else
+    return device.createSwapchainKHR(swapchain_info);
+#endif
+}
+
+vk::Result AcquireFullScreenExclusive(vk::Device device, vk::SwapchainKHR swapchain) {
+#if defined(VK_USE_PLATFORM_WIN32_KHR)
+    return device.acquireFullScreenExclusiveModeEXT(swapchain);
+#else
+    return vk::Result::eErrorFeatureNotPresent;
+#endif
+}
+
 std::vector<const char*> GetInstanceExtensions(Frontend::WindowSystemType window_type,
                                                bool enable_debug_utils) {
     const auto [properties_result, properties] = vk::enumerateInstanceExtensionProperties();
@@ -194,6 +229,8 @@ std::vector<const char*> GetInstanceExtensions(Frontend::WindowSystemType window
 
     if (window_type != Frontend::WindowSystemType::Headless) {
         extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+        // Needed by the exclusive full screen device extension.
+        extensions.push_back(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
     }
 
     if (EmulatorSettings.IsHdrAllowed()) {

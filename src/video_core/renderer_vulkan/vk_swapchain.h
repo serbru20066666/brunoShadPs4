@@ -108,6 +108,9 @@ private:
     /// Performs creation of image views and framebuffers from the swapchain images
     void SetupImages();
 
+    /// Tries to take exclusive full screen for the current swapchain.
+    void AcquireExclusiveFullScreen();
+
     /// Creates the image acquired and present ready semaphores
     void RefreshSemaphores();
 
@@ -132,6 +135,11 @@ private:
     u32 image_index = 0;
     u32 frame_index = 0;
     bool needs_recreation = true;
+    /// Exclusive full screen (Windows): asked for in "Fullscreen" mode. It is lost when the
+    /// window loses focus, and taken again once it can be.
+    bool exclusive_wanted{};
+    bool exclusive_acquired{};
+    u32 exclusive_retry{};
     bool needs_hdr = false;    // The game requested HDR swapchain
     bool supports_hdr = false; // SC supports HDR output
 };

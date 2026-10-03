@@ -22,6 +22,18 @@ constexpr u32 TargetVulkanApiVersion = VK_API_VERSION_1_3;
 
 vk::SurfaceKHR CreateSurface(vk::Instance instance, const Frontend::WindowSDL& emu_window);
 
+/// Name of the device extension for exclusive full screen, where the platform has one.
+const char* FullScreenExclusiveExtensionName();
+
+/// Creates a swapchain that can take exclusive full screen on the monitor the window is on.
+/// The application decides when: see AcquireFullScreenExclusive.
+vk::ResultValue<vk::SwapchainKHR> CreateExclusiveSwapchain(
+    vk::Device device, vk::SwapchainCreateInfoKHR swapchain_info,
+    const Frontend::WindowSDL& emu_window);
+
+/// Takes exclusive full screen for a swapchain made by CreateExclusiveSwapchain.
+vk::Result AcquireFullScreenExclusive(vk::Device device, vk::SwapchainKHR swapchain);
+
 vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool enable_validation,
                                   bool enable_crash_diagnostic);
 
