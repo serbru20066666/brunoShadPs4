@@ -42,7 +42,8 @@ static void CopyFromDeviceMemory(u8* dst, const u8* src, size_t size) {
         --size;
     }
     while (size >= 64) {
-        const auto* line = reinterpret_cast<const __m128i*>(src);
+        // The intrinsic takes a non-const pointer on some compilers, though it only reads.
+        auto* line = reinterpret_cast<__m128i*>(const_cast<u8*>(src));
         const __m128i a = _mm_stream_load_si128(line);
         const __m128i b = _mm_stream_load_si128(line + 1);
         const __m128i c = _mm_stream_load_si128(line + 2);

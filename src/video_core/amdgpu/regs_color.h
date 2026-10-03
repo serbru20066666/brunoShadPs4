@@ -3,8 +3,8 @@
 
 #pragma once
 
-#include "video_core/amdgpu/pixel_format.h"
 #include "video_core/amdgpu/msaa_override.h"
+#include "video_core/amdgpu/pixel_format.h"
 #include "video_core/amdgpu/tiling.h"
 
 namespace AmdGpu {
