@@ -1,0 +1,146 @@
+// SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#version 450
+
+// Edge anti-aliasing applied to the guest frame before scaling. Follows the structure of the
+// FXAA 3.11 "quality" algorithm: find pixels with local luma contrast, decide whether the edge
+// is horizontal or vertical, walk along it to both ends and blend across it in proportion to
+// the pixel's position on the edge, plus a sub-pixel term for thin features.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform texture2D InputTexture;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D OutputTexture;
+layout(set = 0, binding = 2) uniform sampler InputSampler;
+
+layout(push_constant) uniform Constants {
+    vec2 inv_size;
+    uint linear_input; // input is sRGB-decoded: estimate perceptual luma with sqrt
+};
+
+const float EDGE_THRESHOLD = 0.125;    // minimum contrast relative to local max
+const float EDGE_THRESHOLD_MIN = 0.0312; // ignore very dark areas
+const float SUBPIX = 0.75;             // amount of sub-pixel blending
+const int SEARCH_STEPS = 12;
+const float STEP_SIZE[SEARCH_STEPS] = float[](1.0, 1.0, 1.0, 1.0, 1.0, 1.5, 2.0, 2.0, 2.0, 2.0, 4.0, 8.0);
+
+vec4 Fetch(vec2 uv) {
+    return textureLod(sampler2D(InputTexture, InputSampler), uv, 0.0);
+}
+
+float Luma(vec3 c) {
+    const float l = max(dot(c, vec3(0.299, 0.587, 0.114)), 0.0);
+    return linear_input != 0u ? sqrt(l) : l;
+}
+
+float LumaAt(vec2 uv) {
+    return Luma(Fetch(uv).rgb);
+}
+
+float LumaOff(vec2 uv, vec2 off) {
+    return LumaAt(uv + off * inv_size); // texel centre, so the linear filter returns it exactly
+}
+
+void main() {
+    const ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 size = imageSize(OutputTexture);
+    if (pos.x >= size.x || pos.y >= size.y) {
+        return;
+    }
+
+    vec2 uv = (vec2(pos) + 0.5) * inv_size;
+    const vec4 rgbM = Fetch(uv);
+    const float lumaM = Luma(rgbM.rgb);
+    float lumaN = LumaOff(uv, vec2(0, -1));
+    float lumaS = LumaOff(uv, vec2(0, 1));
+    const float lumaE = LumaOff(uv, vec2(1, 0));
+    const float lumaW = LumaOff(uv, vec2(-1, 0));
+
+    const float range_max = max(max(lumaN, lumaS), max(max(lumaE, lumaW), lumaM));
+    const float range_min = min(min(lumaN, lumaS), min(min(lumaE, lumaW), lumaM));
+    const float range = range_max - range_min;
+    if (range < max(EDGE_THRESHOLD_MIN, range_max * EDGE_THRESHOLD)) {
+        imageStore(OutputTexture, pos, vec4(rgbM.rgb, 1.0));
+        return;
+    }
+
+    const float lumaNW = LumaOff(uv, vec2(-1, -1));
+    const float lumaNE = LumaOff(uv, vec2(1, -1));
+    const float lumaSW = LumaOff(uv, vec2(-1, 1));
+    const float lumaSE = LumaOff(uv, vec2(1, 1));
+
+    const float edge_horz = abs(lumaNW + lumaSW - 2.0 * lumaW) +
+                            2.0 * abs(lumaN + lumaS - 2.0 * lumaM) +
+                            abs(lumaNE + lumaSE - 2.0 * lumaE);
+    const float edge_vert = abs(lumaNW + lumaNE - 2.0 * lumaN) +
+                            2.0 * abs(lumaW + lumaE - 2.0 * lumaM) +
+                            abs(lumaSW + lumaSE - 2.0 * lumaS);
+    const bool horz_span = edge_horz >= edge_vert;
+
+    // Sub-pixel term: how much the centre differs from its 3x3 neighbourhood.
+    const float luma_avg =
+        (2.0 * (lumaN + lumaS + lumaE + lumaW) + lumaNW + lumaNE + lumaSW + lumaSE) / 12.0;
+    const float subpix_b = clamp(abs(luma_avg - lumaM) / range, 0.0, 1.0);
+    const float subpix_c = (-2.0 * subpix_b + 3.0) * subpix_b * subpix_b;
+    const float subpix = subpix_c * subpix_c * SUBPIX;
+
+    if (!horz_span) {
+        lumaN = lumaW;
+        lumaS = lumaE;
+    }
+    float length_sign = horz_span ? inv_size.y : inv_size.x;
+    const float gradient_n = abs(lumaN - lumaM);
+    const float gradient_s = abs(lumaS - lumaM);
+    const bool pair_n = gradient_n >= gradient_s;
+    const float gradient_scaled = max(gradient_n, gradient_s) * 0.25;
+    const float luma_pair = (pair_n ? lumaN : lumaS) + lumaM;
+    if (pair_n) {
+        length_sign = -length_sign;
+    }
+
+    // Walk along the edge, half a pixel towards the neighbour with the steepest gradient.
+    vec2 pos_b = uv;
+    if (horz_span) {
+        pos_b.y += length_sign * 0.5;
+    } else {
+        pos_b.x += length_sign * 0.5;
+    }
+    const vec2 off_np = horz_span ? vec2(inv_size.x, 0.0) : vec2(0.0, inv_size.y);
+    vec2 pos_n = pos_b - off_np * STEP_SIZE[0];
+    vec2 pos_p = pos_b + off_np * STEP_SIZE[0];
+    float luma_end_n = LumaAt(pos_n) - luma_pair * 0.5;
+    float luma_end_p = LumaAt(pos_p) - luma_pair * 0.5;
+    bool done_n = abs(luma_end_n) >= gradient_scaled;
+    bool done_p = abs(luma_end_p) >= gradient_scaled;
+    for (int i = 1; i < SEARCH_STEPS && !(done_n && done_p); ++i) {
+        if (!done_n) {
+            pos_n -= off_np * STEP_SIZE[i];
+            luma_end_n = LumaAt(pos_n) - luma_pair * 0.5;
+            done_n = abs(luma_end_n) >= gradient_scaled;
+        }
+        if (!done_p) {
+            pos_p += off_np * STEP_SIZE[i];
+            luma_end_p = LumaAt(pos_p) - luma_pair * 0.5;
+            done_p = abs(luma_end_p) >= gradient_scaled;
+        }
+    }
+
+    const float dst_n = horz_span ? uv.x - pos_n.x : uv.y - pos_n.y;
+    const float dst_p = horz_span ? pos_p.x - uv.x : pos_p.y - uv.y;
+    const bool direction_n = dst_n < dst_p;
+    const float luma_end = direction_n ? luma_end_n : luma_end_p;
+    const bool luma_m_lt_zero = lumaM - luma_pair * 0.5 < 0.0;
+    // Only blend when the closest end of the edge goes the opposite way to the centre.
+    const bool good_span = (luma_end < 0.0) != luma_m_lt_zero;
+    const float span_length = dst_p + dst_n;
+    const float pixel_offset = good_span ? (-min(dst_n, dst_p) / span_length + 0.5) : 0.0;
+    const float final_offset = max(pixel_offset, subpix);
+
+    if (horz_span) {
+        uv.y += final_offset * length_sign;
+    } else {
+        uv.x += final_offset * length_sign;
+    }
+    imageStore(OutputTexture, pos, vec4(Fetch(uv).rgb, 1.0));
+}

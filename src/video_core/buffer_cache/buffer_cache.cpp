@@ -285,17 +285,25 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
         return;
     }
 
-    const vk::MemoryAllocateInfo alloc_info = {
-        .allocationSize = resident_blocks << block_shift,
-        .memoryTypeIndex = arena_memory_type_index,
-    };
-    const auto device_memory = Vulkan::Check(instance.GetDevice().allocateMemory(alloc_info));
+    const u64 needed = u64{resident_blocks} << block_shift;
+    if (!residency_chunk || residency_chunk_used + needed > residency_chunk_size) {
+        residency_chunk_size = std::max(RESIDENCY_CHUNK_SIZE, needed);
+        const vk::MemoryAllocateInfo alloc_info = {
+            .allocationSize = residency_chunk_size,
+            .memoryTypeIndex = arena_memory_type_index,
+        };
+        residency_chunk = Vulkan::Check(instance.GetDevice().allocateMemory(alloc_info));
+        residency_chunk_used = 0;
+        LOG_INFO(Render, "Allocated {} MiB residency chunk", residency_chunk_size >> 20);
+    }
+    const vk::DeviceMemory device_memory = residency_chunk;
+    u64 memory_offset = residency_chunk_used;
+    residency_chunk_used += needed;
 
     boost::container::small_vector<vk::BufferCopy, 8> copies;
     const auto staging =
         staging_pool.Request(resident_blocks * sizeof(vk::DeviceAddress), MemoryType::HostUncached);
 
-    u64 memory_offset{};
     ArenaBinds* binds = BindsForArena(arena);
     auto* bda_addrs = reinterpret_cast<vk::DeviceAddress*>(staging.mapped);
     u64 offset = staging.offset;
@@ -307,7 +315,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
         backing.offset = memory_offset >> block_shift;
         resident_ranges.Add(backing);
 
-        LOG_INFO(Render, "Making range start={}, end={} resident", backing.start, backing.end);
+        LOG_DEBUG(Render, "Making range start={}, end={} resident", backing.start, backing.end);
 
         const auto& bind = binds->binds.emplace_back(vk::SparseMemoryBind{
             .resourceOffset = (range.start << block_shift) - arena->cpu_addr,

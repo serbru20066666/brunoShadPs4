@@ -1160,6 +1160,10 @@ set(VIDEO_CORE src/video_core/amdgpu/cb_db_extent.h
                src/video_core/renderer_vulkan/vk_swapchain.h
                src/video_core/renderer_vulkan/host_passes/fsr_pass.cpp
                src/video_core/renderer_vulkan/host_passes/fsr_pass.h
+               src/video_core/renderer_vulkan/host_passes/fxaa_pass.cpp
+               src/video_core/renderer_vulkan/host_passes/fxaa_pass.h
+               src/video_core/renderer_vulkan/render_target_sync.cpp
+               src/video_core/renderer_vulkan/render_target_sync.h
                src/video_core/renderer_vulkan/host_passes/pp_pass.cpp
                src/video_core/renderer_vulkan/host_passes/pp_pass.h
                src/video_core/texture_cache/blit_helper.cpp

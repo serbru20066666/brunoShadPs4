@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/debug.h"
+#include "common/elf_info.h"
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
 #include "core/memory.h"
@@ -18,7 +19,6 @@
 #include "video_core/renderer_vulkan/vk_shader_hle.h"
 #include "video_core/texture_cache/image_view.h"
 #include "video_core/texture_cache/texture_cache.h"
-#include "common/elf_info.h"
 
 namespace Vulkan {
 
@@ -41,11 +41,16 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
       liverpool{liverpool_}, memory{Core::Memory::Instance()},
       pipeline_cache{instance, scheduler, liverpool, buffer_cache.GetSparsePageShift()},
       host_markers_enabled{EmulatorSettings.IsVkHostMarkersEnabled()},
-      guest_markers_enabled{EmulatorSettings.IsVkGuestMarkersEnabled()} {
+      guest_markers_enabled{EmulatorSettings.IsVkGuestMarkersEnabled()},
+      rt_sync{scheduler, runtime, texture_cache} {
     // God of War III Remastered: render without host MSAA (see msaa_override.h).
     {
         const auto& serial = Common::ElfInfo::Instance().GameSerial();
         AmdGpu::g_force_no_msaa = serial == "CUSA01623" || serial == "CUSA01715";
+        rt_sync_enabled = AmdGpu::g_force_no_msaa;
+        // GoW3 reads small GPU-written images on the CPU after every frame fence. Waiting for
+        // the GPU at each fence serialised CPU and GPU (40 fps at 1440p with the GPU ~30% busy).
+        defer_fences = AmdGpu::g_force_no_msaa;
         if (AmdGpu::g_force_no_msaa) {
             LOG_INFO(Render_Vulkan, "Host MSAA disabled for {} (GoW3 depth stripes fix)", serial);
         }
@@ -399,16 +404,53 @@ void Rasterizer::Finish() {
 }
 
 void Rasterizer::OnSubmit() {
+    if (rt_sync_enabled) {
+        rt_sync.ClearRecords();
+    }
     buffer_cache.TickFrame();
-    texture_cache.ProcessDownloadImages();
+    if (!defer_fences) {
+        // With deferred fences, downloads stay pending until the next fence, which is when
+        // the guest can rely on them.
+        texture_cache.ProcessDownloadImages();
+    }
     texture_cache.RunGarbageCollector();
     runtime.TickFrame();
 }
 
-void Rasterizer::OnFence() {
-    texture_cache.ProcessDownloadImages();
+std::optional<u64> Rasterizer::OnFence(bool allow_defer) {
+    if (!defer_fences || !allow_defer) {
+        texture_cache.ProcessDownloadImages();
+        return std::nullopt;
+    }
+    if (const auto tick = texture_cache.ProcessDownloadImages(true)) {
+        last_deferred_tick = *tick;
+        return tick;
+    }
+    // Fences must reach the guest in order: while an earlier one is still queued, queue this
+    // one behind it.
+    if (deferred_fences_pending.load(std::memory_order_acquire) > 0) {
+        return last_deferred_tick;
+    }
+    return std::nullopt;
 }
 
+void Rasterizer::SignalAfterFence(std::optional<u64> tick, Common::UniqueFunction<void>&& signal) {
+    if (!tick) {
+        signal();
+        return;
+    }
+    deferred_fences_pending.fetch_add(1, std::memory_order_acq_rel);
+    scheduler.DeferPriorityOperation(
+        [this, signal = std::move(signal)]() mutable {
+            signal();
+            deferred_fences_pending.fetch_sub(1, std::memory_order_acq_rel);
+        },
+        *tick);
+    // The worker runs operations in order: anything queued earlier for the tick still being
+    // recorded would hold this signal back until the next submission, while the guest may
+    // be waiting for it before submitting anything else. Submit now.
+    scheduler.Flush();
+}
 bool Rasterizer::BindResources(const Pipeline* pipeline) {
     if (IsComputeImageCopy(pipeline) || IsComputeMetaClear(pipeline) ||
         IsComputeImageClear(pipeline)) {
@@ -867,6 +909,9 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
             }
 
             image_id = texture_cache.FindImage(desc);
+            if (rt_sync_enabled && !image_desc.is_written) {
+                rt_sync.CopyFromLastRt(desc.info.guest_address, image_id);
+            }
             auto* image = &texture_cache.GetImage(image_id);
             if (auto depth_image_id = texture_cache.GetAssociatedDepth(*image)) {
                 // If this image has an associated depth image, it's a stencil attachment.
@@ -1009,6 +1054,9 @@ RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
         texture_cache.UpdateImage(image_id);
         runtime.SetBackingSamples(image, key.color_samples[cb]);
         const auto& image_view = texture_cache.FindRenderTarget(image_id, desc);
+        if (rt_sync_enabled) {
+            rt_sync.RecordRtWrite(desc.info.guest_address, image_id);
+        }
         const auto slice = image_view.info.range.base.layer;
         const auto mip = image_view.info.range.base.level;
 
@@ -1491,8 +1539,14 @@ void Rasterizer::UpdateDepthStencilState() const {
         if ((front_op && ref_conflict(regs.depth_control.stencil_ref_func, front)) ||
             (back_op && regs.depth_control.backface_enable &&
              ref_conflict(regs.depth_control.stencil_bf_func, back))) {
-            LOG_WARNING(Render_Vulkan, "Stencil test requires test_val while ReplaceOp requires "
-                                       "op_val; the stencil test will use op_val");
+            // Evaluated per draw; log once so it doesn't flood the log and cost CPU time.
+            static bool logged = false;
+            if (!logged) {
+                logged = true;
+                LOG_WARNING(Render_Vulkan,
+                            "Stencil test requires test_val while ReplaceOp requires op_val; the "
+                            "stencil test will use op_val (logged once)");
+            }
         }
         dynamic_state.SetStencilReferences(front_op ? front.stencil_op_val : front.stencil_test_val,
                                            back_op ? back.stencil_op_val : back.stencil_test_val);

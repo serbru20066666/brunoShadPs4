@@ -160,6 +160,14 @@ private:
     };
     IntervalList<Backing> resident_ranges;
 
+    /// Residency memory is sub-allocated from large chunks: one vkAllocateMemory per few
+    /// blocks caused hitches while new areas streamed in, and approaches the driver's
+    /// allocation count limit in long sessions. Backings are never freed, so neither are chunks.
+    static constexpr u64 RESIDENCY_CHUNK_SIZE = 64_MB;
+    vk::DeviceMemory residency_chunk{};
+    u64 residency_chunk_size{};
+    u64 residency_chunk_used{};
+
     u32 arena_memory_type_index{};
     u32 block_size{};
     u32 block_shift{};

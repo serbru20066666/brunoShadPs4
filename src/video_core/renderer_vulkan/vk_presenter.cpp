@@ -490,6 +490,7 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
         static_cast<float>(EmulatorSettings.GetRcasAttenuation() / 1000.f);
 
     fsr_pass.Create(device, instance.GetAllocator(), num_images);
+    fxaa_pass.Create(device, instance.GetAllocator(), num_images);
     pp_pass.Create(device, swapchain.GetSurfaceFormat().format);
 
     ImGui::Layer::AddLayer(Common::Singleton<Core::Devtools::Layer>::Instance());
@@ -739,6 +740,13 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     runtime.Transit(&image, vk::ImageLayout::eShaderReadOnlyOptimal,
                     vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead);
     runtime.FlushBarriers();
+
+    // Edge anti-aliasing at the game's resolution, before any scaling. sRGB views hand the
+    // shader decoded (linear) values, so it estimates perceptual luma from them.
+    const bool linear_view = view_info.format == vk::Format::eR8G8B8A8Srgb ||
+                             view_info.format == vk::Format::eB8G8R8A8Srgb;
+    image_view = fxaa_pass.Render(cmdbuf, image_view, image_size, EmulatorSettings.IsFxaaEnabled(),
+                                  linear_view);
 
     image_view = fsr_pass.Render(cmdbuf, image_view, image_size, {frame->width, frame->height},
                                  fsr_settings, frame->is_hdr);

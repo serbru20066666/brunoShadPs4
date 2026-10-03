@@ -4,6 +4,7 @@
 #pragma once
 
 #include <mutex>
+#include <optional>
 #include <unordered_set>
 #include <boost/container/small_vector.hpp>
 #include <tsl/robin_map.h>
@@ -12,6 +13,7 @@
 #include "common/multi_level_page_table.h"
 #include "common/slot_vector.h"
 #include "shader_recompiler/resource.h"
+#include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 #include "video_core/texture_cache/blit_helper.h"
 #include "video_core/texture_cache/image.h"
 #include "video_core/texture_cache/image_view.h"
@@ -96,8 +98,9 @@ public:
     /// Evicts any images that overlap the unmapped range.
     void UnmapMemory(VAddr cpu_addr, size_t size);
 
-    /// Schedules a copy of pending images for download back to CPU memory.
-    void ProcessDownloadImages();
+    /// Schedules a copy of pending images for download back to CPU memory. With `defer`, the
+    /// data is written back once the GPU finishes, and the tick to wait for is returned.
+    std::optional<u64> ProcessDownloadImages(bool defer = false);
 
     /// Retrieves the image handle of the image with the provided attributes.
     [[nodiscard]] ImageId FindImage(ImageDesc& desc, bool exact_fmt = false);
@@ -284,6 +287,14 @@ private:
 
     /// Copies image memory back to CPU.
     void DownloadImageMemory(ImageId image_id, bool sync = false);
+
+    struct PendingDownload {
+        Vulkan::StagingBufferRef download;
+        VAddr device_addr;
+        u32 size;
+    };
+    /// Records the copy of a GPU-modified image into a staging buffer, without waiting for it.
+    std::optional<PendingDownload> RecordImageDownload(ImageId image_id, bool deferred);
 
     /// Thread function for copying downloaded images out to CPU memory.
     void DownloadedImagesThread(const std::stop_token& token);

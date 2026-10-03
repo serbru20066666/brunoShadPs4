@@ -3,10 +3,13 @@
 
 #pragma once
 
+#include <atomic>
+#include <optional>
 #include "common/recursive_lock.h"
 #include "common/shared_first_mutex.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/page_manager.h"
+#include "video_core/renderer_vulkan/render_target_sync.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/texture_cache/texture_cache.h"
@@ -82,8 +85,12 @@ public:
     u64 Flush();
     void Finish();
     void OnSubmit();
-    void OnFence();
-
+    /// Called before the guest is signalled (EOP/EOS/release mem/write data). With
+    /// `allow_defer` (end-of-pipe label, written through TryWriteBacking), may return a tick:
+    /// the signal must then be deferred until the GPU reaches it (see SignalAfterFence).
+    std::optional<u64> OnFence(bool allow_defer = false);
+    /// Runs `signal` now, or once the GPU reaches `tick`, in order with earlier deferred ones.
+    void SignalAfterFence(std::optional<u64> tick, Common::UniqueFunction<void>&& signal);
     PipelineCache& GetPipelineCache() {
         return pipeline_cache;
     }
@@ -148,6 +155,11 @@ private:
     PipelineCache pipeline_cache;
     const bool host_markers_enabled;
     const bool guest_markers_enabled;
+    RenderTargetSync rt_sync;
+    bool rt_sync_enabled{};
+    bool defer_fences{};
+    u64 last_deferred_tick{};
+    std::atomic<u32> deferred_fences_pending{};
 
     using RenderTargetInfo = std::pair<VideoCore::ImageId, VideoCore::TextureCache::ImageDesc>;
     std::array<RenderTargetInfo, AmdGpu::NUM_COLOR_BUFFERS> cb_descs;
