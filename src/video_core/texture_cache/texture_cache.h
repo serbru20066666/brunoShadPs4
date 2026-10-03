@@ -9,6 +9,7 @@
 #include <boost/container/small_vector.hpp>
 #include <tsl/robin_map.h>
 
+#include "common/fast_mutex.h"
 #include "common/lru_cache.h"
 #include "common/multi_level_page_table.h"
 #include "common/slot_vector.h"
@@ -361,9 +362,25 @@ private:
     Common::LeastRecentlyUsedCache<u64, u64> sampler_lru_cache;
     const bool readback_linear_images;
     PageTable page_table;
-    std::mutex mutex;
-    std::mutex samplers_mutex;
+    Common::FastMutex mutex;
+    Common::FastMutex samplers_mutex;
     std::mutex download_images_mutex;
+    /// Remembers the image that recent FindImage requests matched exactly, so that textures
+    /// bound on every draw skip the walk over the page table. Entries hold while
+    /// find_generation stays the same; registering or unregistering any image changes it.
+    struct FindCacheEntry {
+        VAddr guest_address{};
+        u32 guest_size{};
+        Extent3D size{};
+        vk::Format pixel_format{};
+        AmdGpu::ImageType type{};
+        SubresourceExtent resources{};
+        bool exact_fmt{};
+        u64 generation{};
+        ImageId image_id{};
+    };
+    std::array<FindCacheEntry, 2048> find_cache{};
+    u64 find_generation{1};
     struct MetaDataInfo {
         MetaType type;
         s32 clear_mask = -1;

@@ -13,6 +13,7 @@
 #include "input/controller.h"
 #include "input/input_handler.h"
 #include "sdl_window.h"
+#include "video_core/perf_counters.h"
 
 // SDL
 #include <SDL3/SDL.h>
@@ -864,9 +865,33 @@ void NewFrame(bool is_reusing_frame) {
                 std::fflush(perf_file);
             }
             if (window_time >= 5.0) {
-                std::fprintf(perf_file, "t=%.0fs avg %.1f fps | worst %.1f ms | >50ms: %d\n",
+                // Time the emulator spent blocked on the GPU, per second of real time.
+                const u64 waits = VideoCore::Perf::gpu_waits.exchange(0);
+                const u64 wait_us = VideoCore::Perf::gpu_wait_us.exchange(0);
+                const u64 readbacks = VideoCore::Perf::buffer_readbacks.exchange(0);
+                const u64 rb_call = VideoCore::Perf::readback_call_us.exchange(0);
+                const u64 rb_work = VideoCore::Perf::readback_work_us.exchange(0);
+                const u64 rb_bytes = VideoCore::Perf::readback_bytes.exchange(0);
+                const u64 rb_ranges = VideoCore::Perf::readback_ranges.exchange(0);
+                const u64 rb_copy = VideoCore::Perf::readback_copy_us.exchange(0);
+                const u64 rb_write = VideoCore::Perf::readback_write_us.exchange(0);
+                std::fprintf(perf_file,
+                             "t=%.0fs avg %.1f fps | worst %.1f ms | >50ms: %d | gpu waits %.0f/s "
+                             "%.0f ms/s | buffer readbacks %.0f/s, guest blocked %.0f ms/s, work "
+                             "%.0f ms/s, %.0f KB/s (mirror %.0f), %.0f ranges/s, copy %.0f ms/s, "
+                             "write %.0f ms/s | gpu "
+                             "thread busy %.0f ms/s, %.0f draws/s\n",
                              SDL_GetTicks() / 1000.0, frames / window_time, worst * 1000.0f,
-                             stutters);
+                             stutters, waits / window_time, wait_us / 1000.0 / window_time,
+                             readbacks / window_time, rb_call / 1000.0 / window_time,
+                             rb_work / 1000.0 / window_time, rb_bytes / 1024.0 / window_time,
+                             VideoCore::Perf::readback_mirror_bytes.exchange(0) / 1024.0 /
+                                 window_time,
+                             rb_ranges / window_time, rb_copy / 1e6 / window_time,
+                             rb_write / 1e6 / window_time,
+                             static_cast<s64>(VideoCore::Perf::gpu_thread_busy_ns.exchange(0)) /
+                                 1e6 / window_time,
+                             VideoCore::Perf::draws.exchange(0) / window_time);
                 std::fflush(perf_file);
                 window_time = 0.0;
                 worst = 0.0f;

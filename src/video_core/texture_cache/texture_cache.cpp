@@ -203,7 +203,8 @@ void TextureCache::InvalidateMemory(VAddr addr, size_t size) {
 
 void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size) {
     std::scoped_lock lock{mutex};
-    ForEachImageInRegion(address, max_size, [&](ImageId image_id, Image& image) {
+    // Images that match the base address are all registered in its page.
+    ForEachImageInRegion(address, 1, [&](ImageId image_id, Image& image) {
         // Only consider images that match base address.
         // TODO: Maybe also consider subresources
         if (image.info.guest_address != address) {
@@ -550,6 +551,21 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
     ASSERT(info.guest_address != 0);
 
     std::scoped_lock lock{mutex};
+
+    const u64 cache_slot =
+        ((info.guest_address >> 6) ^ (info.guest_address >> 17) ^ info.guest_size) %
+        find_cache.size();
+    if (const auto& cached = find_cache[cache_slot];
+        cached.generation == find_generation && cached.guest_address == info.guest_address &&
+        cached.guest_size == info.guest_size && cached.size == info.size &&
+        cached.pixel_format == info.pixel_format && cached.type == info.type &&
+        cached.resources == info.resources && cached.exact_fmt == exact_fmt) {
+        Image& image = slot_images[cached.image_id];
+        image.tick_accessed_last = scheduler.CurrentTick();
+        TouchImage(image);
+        return cached.image_id;
+    }
+
     ImageIds image_ids;
     ForEachImageInRegion(info.guest_address, info.guest_size,
                          [&](ImageId image_id, Image& image) { image_ids.push_back(image_id); });
@@ -577,6 +593,8 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
         }
         image_id = cache_id;
     }
+
+    const bool exact_match = static_cast<bool>(image_id);
 
     // Try to resolve overlaps (if any)
     int view_mip{-1};
@@ -609,6 +627,19 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
             LOG_WARNING(Render_Vulkan, "Image overlap resolve failed");
         }
     }
+    if (exact_match && image_id) {
+        find_cache[cache_slot] = {
+            .guest_address = info.guest_address,
+            .guest_size = info.guest_size,
+            .size = info.size,
+            .pixel_format = info.pixel_format,
+            .type = info.type,
+            .resources = info.resources,
+            .exact_fmt = exact_fmt,
+            .generation = find_generation,
+            .image_id = image_id,
+        };
+    }
     // Create and register a new image
     if (!image_id) {
         image_id = slot_images.Insert(instance, runtime, slot_image_views, info);
@@ -632,7 +663,9 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
 
 ImageId TextureCache::FindImageFromRange(VAddr address, size_t size, bool ensure_valid) {
     ImageIds image_ids;
-    ForEachImageInRegion(address, size, [&](ImageId image_id, Image& image) {
+    // Only images starting at address qualify, and those are all registered in its page: there
+    // is no need to walk the whole range, which can span hundreds of MiB for texel buffers.
+    ForEachImageInRegion(address, 1, [&](ImageId image_id, Image& image) {
         if (image.info.guest_address != address) {
             return;
         }
@@ -851,6 +884,7 @@ void TextureCache::RegisterImage(ImageId image_id) {
     ASSERT_MSG(False(image.flags & ImageFlagBits::Registered),
                "Trying to register an already registered image");
     image.flags |= ImageFlagBits::Registered;
+    ++find_generation;
     total_used_memory += Common::AlignUp(image.info.guest_size, 1024);
     image.lru_id = lru_cache.Insert(image_id, gc_tick);
     ForEachPage(image.info.guest_address, image.info.guest_size,
@@ -862,6 +896,7 @@ void TextureCache::UnregisterImage(ImageId image_id) {
     ASSERT_MSG(True(image.flags & ImageFlagBits::Registered),
                "Trying to unregister an already unregistered image");
     image.flags &= ~ImageFlagBits::Registered;
+    ++find_generation;
     lru_cache.Free(image.lru_id);
     total_used_memory -= Common::AlignUp(image.info.guest_size, 1024);
     ForEachPage(image.info.guest_address, image.info.guest_size, [this, image_id](u64 page) {

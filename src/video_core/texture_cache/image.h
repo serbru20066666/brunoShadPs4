@@ -153,6 +153,14 @@ public:
         UniqueImage image;
         State state;
         std::vector<State> subresource_states;
+        /// While partially transited: ranges whose subresources are all known to be in the
+        /// given read-only state, so that binding them again needs no walk over the states.
+        struct SettledRange {
+            SubresourceRange range;
+            vk::ImageLayout layout;
+            vk::AccessFlags2 access_mask;
+        };
+        boost::container::static_vector<SettledRange, 4> settled_ranges;
         boost::container::small_vector<ImageViewInfo, 4> image_view_infos;
         boost::container::small_vector<ImageViewId, 4> image_view_ids;
         u32 num_samples;

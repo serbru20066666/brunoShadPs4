@@ -413,6 +413,8 @@ struct GPUSettings {
     Setting<bool> rcas_enabled{true};
     Setting<int> rcas_attenuation{250};
     Setting<bool> fxaa_enabled{false};
+    Setting<bool> render_target_sync{false};
+    Setting<bool> direct_readbacks{false};
     Setting<bool> userfaultfd{false};
     Setting<bool> inline_fetch_shader{false};
 
@@ -430,6 +432,8 @@ struct GPUSettings {
             make_override<GPUSettings>("rcas_enabled", &GPUSettings::rcas_enabled),
             make_override<GPUSettings>("rcas_attenuation", &GPUSettings::rcas_attenuation),
             make_override<GPUSettings>("fxaa_enabled", &GPUSettings::fxaa_enabled),
+            make_override<GPUSettings>("render_target_sync", &GPUSettings::render_target_sync),
+            make_override<GPUSettings>("direct_readbacks", &GPUSettings::direct_readbacks),
             make_override<GPUSettings>("dump_shaders", &GPUSettings::dump_shaders),
             make_override<GPUSettings>("patch_shaders", &GPUSettings::patch_shaders),
             make_override<GPUSettings>("readbacks_mode", &GPUSettings::readbacks_mode),
@@ -449,7 +453,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(GPUSettings, window_width, window_height, int
                                    direct_memory_access_enabled, dump_shaders, patch_shaders,
                                    vblank_frequency, full_screen, full_screen_mode, present_mode,
                                    hdr_allowed, fsr_enabled, rcas_enabled, rcas_attenuation,
-                                   fxaa_enabled, userfaultfd, inline_fetch_shader)
+                                   fxaa_enabled, render_target_sync, direct_readbacks, userfaultfd,
+                                   inline_fetch_shader)
 
 // -------------------------------
 // Vulkan settings
@@ -713,6 +718,8 @@ public:
     SETTING_FORWARD_BOOL(m_gpu, RcasEnabled, rcas_enabled)
     SETTING_FORWARD(m_gpu, RcasAttenuation, rcas_attenuation)
     SETTING_FORWARD_BOOL(m_gpu, FxaaEnabled, fxaa_enabled)
+    SETTING_FORWARD_BOOL(m_gpu, RenderTargetSyncEnabled, render_target_sync)
+    SETTING_FORWARD_BOOL(m_gpu, DirectReadbacksEnabled, direct_readbacks)
     SETTING_FORWARD(m_gpu, ReadbacksMode, readbacks_mode)
     SETTING_FORWARD_BOOL(m_gpu, ReadbackLinearImagesEnabled, readback_linear_images_enabled)
     SETTING_FORWARD_BOOL(m_gpu, DirectMemoryAccessEnabled, direct_memory_access_enabled)

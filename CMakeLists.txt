@@ -213,7 +213,7 @@ execute_process(
 
 # Set Version
 set(EMULATOR_VERSION_MAJOR "0")
-set(EMULATOR_VERSION_MINOR "19")
+set(EMULATOR_VERSION_MINOR "21")
 set(EMULATOR_VERSION_PATCH "1")
 
 set_source_files_properties(src/dist/shadps4.rc PROPERTIES COMPILE_DEFINITIONS "EMULATOR_VERSION_MAJOR=${EMULATOR_VERSION_MAJOR};EMULATOR_VERSION_MINOR=${EMULATOR_VERSION_MINOR};EMULATOR_VERSION_PATCH=${EMULATOR_VERSION_PATCH}")
@@ -794,6 +794,7 @@ set(COMMON src/common/logging/classes.cpp
            src/common/elf_info.h
            src/common/endian.h
            src/common/enum.h
+           src/common/fast_mutex.h
            src/common/incremental_id.h
            src/common/interval_set.h
            src/common/io_file.cpp

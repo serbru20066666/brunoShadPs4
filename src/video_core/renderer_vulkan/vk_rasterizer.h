@@ -4,6 +4,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <optional>
 #include "common/recursive_lock.h"
 #include "common/shared_first_mutex.h"
@@ -157,6 +158,8 @@ private:
     const bool guest_markers_enabled;
     RenderTargetSync rt_sync;
     bool rt_sync_enabled{};
+    std::chrono::steady_clock::time_point last_buffer_flush{};
+    void FlushBufferWrites();
     bool defer_fences{};
     u64 last_deferred_tick{};
     std::atomic<u32> deferred_fences_pending{};

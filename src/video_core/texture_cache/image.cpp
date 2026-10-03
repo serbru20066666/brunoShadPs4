@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <ranges>
 #include "common/assert.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
@@ -225,17 +226,54 @@ void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::Acce
                         std::optional<SubresourceRange> subres_range) {
     auto& last_state = backing->state;
     auto& subresource_states = backing->subresource_states;
+    auto& settled_ranges = backing->settled_ranges;
+
+    constexpr auto write_flags = vk::AccessFlagBits2::eTransferWrite |
+                                 vk::AccessFlagBits2::eShaderWrite |
+                                 vk::AccessFlagBits2::eMemoryWrite;
+    const bool dst_is_write = static_cast<bool>(dst_mask & write_flags);
 
     const bool needs_partial_transition =
         subres_range &&
         (subres_range->base != SubresourceBase{} || subres_range->extent != info.resources);
     const bool partially_transited = !subresource_states.empty();
 
+    // Textures are bound on every draw, often through views that do not cover the whole image.
+    // Walking the state of each subresource every time is too slow for images with many of
+    // them, so the common case of a part that is already in the requested state is cut short.
+    if (needs_partial_transition && !dst_is_write) {
+        if (!partially_transited) {
+            if (last_state.layout == dst_layout && last_state.access_mask == dst_mask) {
+                return;
+            }
+        } else {
+            const auto& range = *subres_range;
+            const bool settled = std::ranges::any_of(settled_ranges, [&](const auto& entry) {
+                const auto& known = entry.range;
+                return entry.layout == dst_layout && entry.access_mask == dst_mask &&
+                       range.base.level >= known.base.level &&
+                       range.base.level + range.extent.levels <=
+                           known.base.level + known.extent.levels &&
+                       range.base.layer >= known.base.layer &&
+                       range.base.layer + range.extent.layers <=
+                           known.base.layer + known.extent.layers;
+            });
+            if (settled) {
+                last_state.layout = dst_layout;
+                last_state.access_mask = dst_mask;
+                last_state.pl_stage = dst_stage;
+                return;
+            }
+        }
+    }
+
     if (needs_partial_transition || partially_transited) {
         if (!partially_transited) {
             subresource_states.resize(info.resources.levels * info.resources.layers);
             std::fill(subresource_states.begin(), subresource_states.end(), last_state);
+            settled_ranges.clear();
         }
+        const size_t first_barrier = barriers.size();
 
         // In case of partial transition, we need to change the specified subresources only.
         // Otherwise all subresources need to be set to the same state so we can use a full
@@ -259,9 +297,6 @@ void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::Acce
                 ASSERT(subres_idx < subresource_states.size());
                 auto& state = subresource_states[subres_idx];
 
-                constexpr auto write_flags = vk::AccessFlagBits2::eTransferWrite |
-                                             vk::AccessFlagBits2::eShaderWrite |
-                                             vk::AccessFlagBits2::eMemoryWrite;
                 const bool is_write = static_cast<bool>(state.access_mask & write_flags);
                 if (state.layout != dst_layout || state.access_mask != dst_mask || is_write) {
                     barriers.emplace_back(vk::ImageMemoryBarrier2{
@@ -291,11 +326,20 @@ void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::Acce
 
         if (!needs_partial_transition) {
             subresource_states.clear();
+            settled_ranges.clear();
+        } else {
+            if (barriers.size() != first_barrier) {
+                // Some subresource changed state: what was known about other ranges is stale.
+                settled_ranges.clear();
+            }
+            if (!dst_is_write) {
+                if (settled_ranges.size() == settled_ranges.capacity()) {
+                    settled_ranges.erase(settled_ranges.begin());
+                }
+                settled_ranges.push_back({*subres_range, dst_layout, dst_mask});
+            }
         }
     } else { // Full resource transition
-        constexpr auto write_flags = vk::AccessFlagBits2::eTransferWrite |
-                                     vk::AccessFlagBits2::eShaderWrite |
-                                     vk::AccessFlagBits2::eMemoryWrite;
         const bool is_write = static_cast<bool>(last_state.access_mask & write_flags);
         if (last_state.layout == dst_layout && last_state.access_mask == dst_mask && !is_write) {
             return;

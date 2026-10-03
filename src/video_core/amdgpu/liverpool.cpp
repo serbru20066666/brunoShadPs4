@@ -3,6 +3,7 @@
 
 #include <boost/preprocessor/stringize.hpp>
 
+#include <chrono>
 #include "common/assert.h"
 #include "common/debug.h"
 #include "common/polyfill_thread.h"
@@ -15,6 +16,7 @@
 #include "core/platform.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/amdgpu/pm4_cmds.h"
+#include "video_core/perf_counters.h"
 #include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 
@@ -125,7 +127,13 @@ void Liverpool::Process(std::stop_token stoken) {
                 }
                 task = queue.submits.front();
             }
+            const auto busy_start = std::chrono::steady_clock::now();
             task.resume();
+            VideoCore::Perf::gpu_thread_busy_ns.fetch_add(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - busy_start)
+                    .count(),
+                std::memory_order_relaxed);
 
             if (task.done()) {
                 task.destroy();
@@ -817,7 +825,14 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 const u64* wait_addr = wait_reg_mem->Address<u64*>();
                 if (vo_port->IsVoLabel(wait_addr) &&
                     num_submits == mapped_queues[GfxQueueId].submits.size()) {
+                    // Sleeping until the flip completes is idle time, not work.
+                    const auto wait_start = std::chrono::steady_clock::now();
                     vo_port->WaitVoLabel([&] { return wait_reg_mem->Test(regs.reg_array); });
+                    VideoCore::Perf::gpu_thread_busy_ns.fetch_sub(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now() - wait_start)
+                            .count(),
+                        std::memory_order_relaxed);
                     break;
                 }
                 while (!wait_reg_mem->Test(regs.reg_array)) {

@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
 #include "common/assert.h"
 #include "common/debug.h"
 #include "common/thread.h"
 #include "imgui/renderer/texture_manager.h"
+#include "video_core/perf_counters.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 
@@ -119,7 +121,13 @@ void Scheduler::Finish() {
     const u64 presubmit_tick = CurrentTick();
     SubmitInfo info{};
     SubmitExecution(info);
+    const auto start = std::chrono::steady_clock::now();
     Wait(presubmit_tick);
+    VideoCore::Perf::gpu_waits.fetch_add(1, std::memory_order_relaxed);
+    VideoCore::Perf::gpu_wait_us.fetch_add(std::chrono::duration_cast<std::chrono::microseconds>(
+                                               std::chrono::steady_clock::now() - start)
+                                               .count(),
+                                           std::memory_order_relaxed);
 }
 
 void Scheduler::Wait(u64 tick) {

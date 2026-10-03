@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
+#include <cstring>
+#include <memory>
 #include "common/assert.h"
 #include "core/libraries/kernel/process.h"
 #include "core/libraries/videoout/buffer.h"
@@ -115,7 +118,35 @@ ImageInfo::ImageInfo(const AmdGpu::DepthBuffer& buffer, u32 num_slices, VAddr ht
     }
 }
 
+namespace {
+
+/// Shaders describe their textures again on every draw, and working out the layout of all the
+/// mips is the costly part of it: keep the result for the descriptors seen recently.
+struct TextureInfoCache {
+    struct Entry {
+        std::array<u64, 4> key{};
+        bool is_depth{};
+        bool valid{};
+        ImageInfo info;
+    };
+    std::array<Entry, 1024> entries;
+};
+
+} // Anonymous namespace
+
 ImageInfo::ImageInfo(const AmdGpu::Image& image, const Shader::ImageResource& desc) noexcept {
+    static thread_local const auto cache = std::make_unique<TextureInfoCache>();
+    std::array<u64, 4> key;
+    static_assert(sizeof(key) == sizeof(image));
+    std::memcpy(key.data(), &image, sizeof(key));
+    const u64 hash = (key[0] ^ (key[0] >> 29)) + key[1] * 0x9E3779B97F4A7C15ULL +
+                     (key[2] ^ key[3]) * 0xC2B2AE3D27D4EB4FULL;
+    auto& entry = cache->entries[(hash >> 32) % cache->entries.size()];
+    if (entry.valid && entry.key == key && entry.is_depth == desc.is_depth) {
+        *this = entry.info;
+        return;
+    }
+
     tile_mode = image.GetTileMode();
     array_mode = AmdGpu::GetArrayMode(tile_mode);
     pixel_format = LiverpoolToVK::SurfaceFormat(image.GetDataFmt(), image.GetNumberFmt());
@@ -142,6 +173,11 @@ ImageInfo::ImageInfo(const AmdGpu::Image& image, const Shader::ImageResource& de
 
     alt_tile = Libraries::Kernel::sceKernelIsNeoMode() && image.alt_tile_mode;
     UpdateSize();
+
+    entry.key = key;
+    entry.is_depth = desc.is_depth;
+    entry.info = *this;
+    entry.valid = true;
 }
 
 bool ImageInfo::IsCompatible(const ImageInfo& info) const {

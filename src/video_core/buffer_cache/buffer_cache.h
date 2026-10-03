@@ -3,8 +3,14 @@
 
 #pragma once
 
+#include <atomic>
 #include <deque>
+#include <map>
+#include <mutex>
+#include <unordered_map>
+#include <boost/container/flat_map.hpp>
 #include <boost/container/small_vector.hpp>
+#include <tsl/robin_map.h>
 
 #include "common/interval_set.h"
 #include "common/types.h"
@@ -75,6 +81,15 @@ public:
 
     void TickFrame();
 
+    /// With direct readbacks, makes the current submission's writes visible to the host.
+    /// Called right before each scheduler submit.
+    void RecordHostVisibilityBarrier();
+
+    /// With direct readbacks, tells whether GPU-written buffers were bound since the last call.
+    bool ConsumeBufferWrites() {
+        return std::exchange(pending_buffer_writes, false);
+    }
+
     /// Invalidates any buffer in the logical page range.
     void InvalidateMemory(VAddr device_addr, u64 size, bool assume_locks = false);
 
@@ -121,6 +136,23 @@ private:
 
     void DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size);
 
+    /// Direct readback path (see constructor). Returns false to fall back to a GPU copy.
+    bool DownloadMemoryDirect(VAddr device_addr, u64 size, bool on_guest_thread);
+
+    /// Direct readback requested by a guest thread. When the data is still being recorded,
+    /// the GPU thread is only asked to submit it; waiting and copying stay on the caller.
+    bool DownloadOnGuestThread(VAddr device_addr, u64 size);
+
+    /// Records GPU copies into the readback mirror for the memory written by the submission
+    /// being closed that guest threads have been reading back.
+    void RecordMirrorCopies();
+
+    /// Returns the host mapping of resident arena memory, or null.
+    const u8* DeviceMemoryPointer(VAddr device_addr);
+
+    /// Remembers the submission that writes to a buffer range, for direct readbacks.
+    void RecordWriteTick(VAddr device_addr, u64 size);
+
     bool SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 size, bool is_written,
                            bool is_texel_buffer);
 
@@ -138,6 +170,13 @@ private:
     StreamBuffer stream_buffer;
     Buffer gds_buffer;
     RangeSet gpu_modified_ranges;
+
+    /// Memory that was fully uploaded and whose tracking state has not changed since, as of
+    /// clean_sequence of MemoryTracker's state log (see SynchronizeMemory). written_ranges is
+    /// the part of it that is also marked as GPU-modified.
+    RangeSet clean_ranges;
+    RangeSet written_ranges;
+    u64 clean_sequence{};
 
     std::unique_ptr<FaultManager> fault_manager;
     std::unique_ptr<Buffer> bda_pagetable_buffer;
@@ -167,6 +206,43 @@ private:
     vk::DeviceMemory residency_chunk{};
     u64 residency_chunk_size{};
     u64 residency_chunk_used{};
+
+    /// Direct readbacks: host mappings of the residency chunks, and the last submission tick
+    /// that wrote to each 4 KiB granule of guest memory.
+    bool direct_readbacks{};
+    static constexpr u32 WRITE_TICK_SHIFT = 12;
+    bool pending_buffer_writes{};
+    std::unordered_map<VkDeviceMemory, u8*> chunk_maps;
+    tsl::robin_map<u64, u64> write_ticks;
+    struct RecordedWrite {
+        VAddr addr{};
+        u64 size{};
+        u64 tick{};
+    };
+    std::array<RecordedWrite, 256> recorded_writes{};
+    /// Ranges bound as written by the submission being recorded.
+    boost::container::small_vector<std::pair<VAddr, u64>, 16> tick_writes;
+
+    /// Readback mirror: reading the arena's device memory from the host is very slow, so the
+    /// memory that guest threads read back recently ("hot", by frame of the last readback) is
+    /// copied by the GPU into this host-cached ring at the end of every submission that
+    /// writes it. A guest thread then takes it from there once that submission completes.
+    static constexpr u64 MIRROR_SIZE = 64_MB;
+    static constexpr u64 MIRROR_HOT_FRAMES = 120;
+    struct MirrorCopy {
+        u64 tick{};     ///< Submission whose result was copied.
+        u64 position{}; ///< Position in the ring, counted from its first ever byte.
+    };
+    std::unique_ptr<Buffer> mirror;
+    u64 mirror_head{};
+    tsl::robin_map<u64, MirrorCopy> mirror_copies;
+    boost::container::flat_map<u64, u64> hot_granules;
+    std::atomic<u64> frame_counter{};
+    /// Guards gpu_modified_ranges, write_ticks, the readback mirror and the residency tables
+    /// against guest threads.
+    std::recursive_mutex direct_mutex;
+    /// Serialises direct downloads.
+    std::mutex direct_download_mutex;
 
     u32 arena_memory_type_index{};
     u32 block_size{};

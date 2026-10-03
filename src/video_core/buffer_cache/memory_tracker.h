@@ -4,7 +4,10 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <deque>
+#include <mutex>
 #include <vector>
 
 #include "common/types.h"
@@ -22,6 +25,28 @@ public:
     explicit MemoryTracker(PageManager& tracker_)
         : tracker{&tracker_}, readbacks_mode{EmulatorSettings.GetReadbacksMode()} {}
     ~MemoryTracker() = default;
+
+    /// Sequence number of the log of ranges whose state was changed by anything other than
+    /// ForEachUploadRange. A range that was fully uploaded at some sequence number only has to
+    /// look at the ranges logged since.
+    [[nodiscard]] u64 StateSequence() const noexcept {
+        return dirty_seq.load(std::memory_order_acquire);
+    }
+
+    /// Calls func(addr, size) for every range logged since sequence number since. Returns
+    /// false when older entries have already been overwritten, so the caller must do a full scan.
+    bool ForEachStateChangeSince(u64 since, auto&& func) {
+        std::scoped_lock lk{dirty_mutex};
+        const u64 current = dirty_seq.load(std::memory_order_relaxed);
+        if (current - since > DIRTY_LOG_SIZE) {
+            return false;
+        }
+        for (u64 i = since; i < current; ++i) {
+            const auto& entry = dirty_log[i % DIRTY_LOG_SIZE];
+            func(entry.addr, entry.size);
+        }
+        return true;
+    }
 
     /// Returns true if a region has been modified from the GPU
     bool IsRegionGpuModified(VAddr cpu_addr, u64 size) noexcept {
@@ -46,6 +71,7 @@ public:
                 manager->template ChangeRegionState<StateOp::None, StateOp::Clear>(offset, size);
             }
         });
+        LogStateChange(cpu_addr, size);
     }
 
     /// Mark region as modified from the CPU
@@ -53,6 +79,7 @@ public:
         IteratePages(cpu_addr, size, [](RegionManager* manager, u64 offset, u64 size) {
             manager->template ChangeRegionState<StateOp::Set, StateOp::None>(offset, size);
         });
+        LogStateChange(cpu_addr, size);
     }
 
     /// Removes all protection from a page and ensures GPU data has been flushed if requested
@@ -72,6 +99,7 @@ public:
             should_flush |= modified;
             manager->Unlock(bounds);
         });
+        LogStateChange(cpu_addr, size);
         if (should_flush) {
             on_flush();
         }
@@ -100,9 +128,33 @@ public:
             manager->template ForEachModifiedRange<Type::GPU, StateOp::None, gpu_op>(offset, size,
                                                                                      func);
         });
+        if constexpr (clear) {
+            LogStateChange(cpu_addr, size);
+        }
     }
 
 private:
+    void LogStateChange(VAddr addr, u64 size) noexcept {
+        std::scoped_lock lk{dirty_mutex};
+        const u64 seq = dirty_seq.load(std::memory_order_relaxed);
+        // State is tracked per page: once a page is unprotected, later writes anywhere in it
+        // are not reported, so the whole page has to be considered changed.
+        static constexpr u64 LOG_PAGE_MASK = 0x3FFF;
+        const VAddr end = (addr + size + LOG_PAGE_MASK) & ~LOG_PAGE_MASK;
+        addr &= ~LOG_PAGE_MASK;
+        size = end - addr;
+        dirty_log[seq % DIRTY_LOG_SIZE] = {addr, size};
+        dirty_seq.store(seq + 1, std::memory_order_release);
+    }
+    struct DirtyEntry {
+        VAddr addr;
+        u64 size;
+    };
+    static constexpr u64 DIRTY_LOG_SIZE = 4096;
+    std::array<DirtyEntry, DIRTY_LOG_SIZE> dirty_log{};
+    std::atomic<u64> dirty_seq{1};
+    std::mutex dirty_mutex;
+
     template <bool create_region_on_fail = false, typename Func>
     bool IteratePages(VAddr cpu_address, u64 size, Func&& func) {
         using FuncReturn = typename std::invoke_result<Func, RegionManager*, u64, size_t>::type;

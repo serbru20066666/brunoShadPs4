@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
 #include "common/debug.h"
 #include "common/elf_info.h"
 #include "core/debug_state.h"
@@ -10,6 +11,7 @@
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/buffer_cache/buffer_cache.h"
+#include "video_core/perf_counters.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
@@ -47,7 +49,11 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     {
         const auto& serial = Common::ElfInfo::Instance().GameSerial();
         AmdGpu::g_force_no_msaa = serial == "CUSA01623" || serial == "CUSA01715";
-        rt_sync_enabled = AmdGpu::g_force_no_msaa;
+        // Always on for GoW3; other games can opt in with gpu.render_target_sync.
+        rt_sync_enabled = AmdGpu::g_force_no_msaa || EmulatorSettings.IsRenderTargetSyncEnabled();
+        if (rt_sync_enabled) {
+            LOG_INFO(Render_Vulkan, "Render target alias sync enabled");
+        }
         // GoW3 reads small GPU-written images on the CPU after every frame fence. Waiting for
         // the GPU at each fence serialised CPU and GPU (40 fps at 1440p with the GPU ~30% busy).
         defer_fences = AmdGpu::g_force_no_msaa;
@@ -62,6 +68,7 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
 
     scheduler.SetSubmitCallback([this](Vulkan::SubmitInfo& info) {
         runtime.FlushBarriers();
+        buffer_cache.RecordHostVisibilityBarrier();
         buffer_cache.SubmitPendingArenaBinds(info);
     });
 }
@@ -244,6 +251,7 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     DebugState.IncDrawCall();
 
     ResetBindings(false);
+    VideoCore::Perf::draws.fetch_add(1, std::memory_order_relaxed);
 }
 
 void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u32 stride,
@@ -357,6 +365,7 @@ void Rasterizer::DispatchDirect() {
     DebugState.IncDispatch();
 
     ResetBindings(true);
+    FlushBufferWrites();
 }
 
 void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
@@ -390,6 +399,22 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
     DebugState.IncDispatch();
 
     ResetBindings(true);
+    FlushBufferWrites();
+}
+
+void Rasterizer::FlushBufferWrites() {
+    // Direct readbacks wait for the submission that wrote a buffer. Submitting compute output
+    // early lets it complete before the rest of the frame; rate limited, as a submission per
+    // dispatch is far too many.
+    if (!buffer_cache.ConsumeBufferWrites()) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_buffer_flush < std::chrono::milliseconds(2)) {
+        return;
+    }
+    last_buffer_flush = now;
+    Flush();
 }
 
 u64 Rasterizer::Flush() {
@@ -418,6 +443,11 @@ void Rasterizer::OnSubmit() {
 }
 
 std::optional<u64> Rasterizer::OnFence(bool allow_defer) {
+    if (buffer_cache.ConsumeBufferWrites()) {
+        // The guest is about to be told the GPU got here, and may then read what it wrote:
+        // with direct readbacks that needs the commands submitted.
+        Flush();
+    }
     if (!defer_fences || !allow_defer) {
         texture_cache.ProcessDownloadImages();
         return std::nullopt;
@@ -607,6 +637,11 @@ void Rasterizer::ResetBindings(bool is_compute) {
         texture_cache.GetImage(image_id).binding = {};
     }
     for (const auto [buffer, offset, size, is_written] : bound_buffers) {
+        if (!is_written && buffer == &buffer_cache.GetStreamBuffer()) {
+            // Nothing on the GPU ever writes to the stream buffer, so there is no later access
+            // these reads could conflict with: skip the bookkeeping, it runs for every draw.
+            continue;
+        }
         const auto dst_stage = is_compute ? vk::PipelineStageFlagBits2::eComputeShader
                                           : vk::PipelineStageFlagBits2::eAllGraphics;
         const auto write_flag =

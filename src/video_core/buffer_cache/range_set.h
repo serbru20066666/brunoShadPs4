@@ -33,22 +33,42 @@ struct RangeSet {
         const VAddr end_address = base_address + size;
         IntervalType interval{base_address, end_address};
         m_ranges_set.add(interval);
+        m_hit_begin = m_hit_end = 0;
     }
 
     void Subtract(VAddr base_address, size_t size) {
         const VAddr end_address = base_address + size;
         IntervalType interval{base_address, end_address};
         m_ranges_set.subtract(interval);
+        m_hit_begin = m_hit_end = 0;
     }
 
     void Clear() {
         m_ranges_set.clear();
+        m_hit_begin = m_hit_end = 0;
     }
 
     bool Contains(VAddr base_address, size_t size) const {
         const VAddr end_address = base_address + size;
         IntervalType interval{base_address, end_address};
         return boost::icl::contains(m_ranges_set, interval);
+    }
+
+    /// Same answer as Contains, but remembers the range that held the last query: asking
+    /// again about memory inside it, as happens on every draw, does not search the set.
+    bool ContainsCached(VAddr base_address, size_t size) {
+        const VAddr end_address = base_address + size;
+        if (base_address >= m_hit_begin && end_address <= m_hit_end) {
+            return true;
+        }
+        // Touching ranges are joined, so a contained range lies inside a single one.
+        const auto it = m_ranges_set.find(IntervalType{base_address, end_address});
+        if (it == m_ranges_set.end() || it->lower() > base_address || it->upper() < end_address) {
+            return false;
+        }
+        m_hit_begin = it->lower();
+        m_hit_end = it->upper();
+        return true;
     }
 
     bool Intersects(VAddr base_address, size_t size) const {
@@ -111,6 +131,8 @@ struct RangeSet {
     }
 
     IntervalSet m_ranges_set;
+    VAddr m_hit_begin{};
+    VAddr m_hit_end{};
 };
 
 template <typename T>
