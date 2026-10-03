@@ -15,7 +15,15 @@ on:
       - "documents/**"
       - "**/*.md"
 
+  release:
+    types: [published]
+
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Fork only: tag of an existing release to attach the builds to"
+        required: false
+        type: string
 
 concurrency:
   group: ci-${{ github.event_name }}-${{ github.ref }}
@@ -348,6 +356,42 @@ jobs:
 
     - name: Build
       run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}} --parallel $(nproc)
+
+  # Forks: attach the builds to a release published on the fork, or to the release named when
+  # the workflow is run by hand. Upstream publishes through the pre-release job below.
+  fork-release:
+    if: github.repository != 'shadps4-emu/shadPS4' && (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
+    needs: [get-info, windows-sdl, macos-sdl, linux-sdl]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v8
+      with:
+        path: ./artifacts
+
+    - name: Make SDL artifacts executable
+      run: |
+        chmod -R a+x ./artifacts/shadps4-linux-sdl-*
+        chmod -R a+x ./artifacts/shadps4-macos-sdl-*
+
+    - name: Compress individual directories (without parent directory)
+      run: |
+        cd ./artifacts
+        for dir in */; do
+          if [ -d "$dir" ]; then
+            dir_name=${dir%/}
+            echo "Creating zip for $dir_name"
+            (cd "$dir_name" && zip -r "../${dir_name}.zip" .)
+          fi
+        done
+
+    - name: Attach the builds to the release
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+      run: gh release upload "$RELEASE_TAG" ./artifacts/*.zip --clobber --repo "${{ github.repository }}"
 
   pre-release:
     if: github.ref == 'refs/heads/main' && github.repository == 'shadps4-emu/shadPS4' && github.event_name == 'push'
