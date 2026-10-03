@@ -679,15 +679,44 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
             }
             case PM4ItOpcode::EventWriteEop: {
                 const auto* event_eop = reinterpret_cast<const PM4CmdEventWriteEop*>(header);
-                if (rasterizer) {
-                    rasterizer->OnFence();
-                }
+                const auto defer_tick =
+                    rasterizer ? rasterizer->OnFence(/*allow_defer=*/true) : std::nullopt;
+                // Capture the label write and interrupt now (values are computed at this
+                // point) and deliver them together, possibly once the GPU is done.
+                void* label_address{};
+                u64 label_data{};
+                u32 label_bytes{};
+                bool raise_irq{};
                 event_eop->SignalFence(
-                    [](void* address, u64 data, u32 num_bytes) {
-                        auto* memory = Core::Memory::Instance();
-                        ASSERT(memory->TryWriteBacking(address, &data, num_bytes));
+                    [&](void* address, u64 data, u32 num_bytes) {
+                        label_address = address;
+                        label_data = data;
+                        label_bytes = num_bytes;
                     },
-                    [] { Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxEop); });
+                    [&] { raise_irq = true; });
+                if (!defer_tick) {
+                    if (label_address) {
+                        auto* memory = Core::Memory::Instance();
+                        ASSERT(memory->TryWriteBacking(label_address, &label_data, label_bytes));
+                    }
+                    if (raise_irq) {
+                        Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxEop);
+                    }
+                    break;
+                }
+                rasterizer->SignalAfterFence(defer_tick, [this, label_address, label_data,
+                                                          label_bytes, raise_irq] {
+                    if (label_address) {
+                        auto* memory = Core::Memory::Instance();
+                        ASSERT(memory->TryWriteBacking(label_address, &label_data, label_bytes));
+                    }
+                    if (raise_irq) {
+                        // EOP handlers (e.g. EOP flips) expect to run on the GPU thread.
+                        SendCommand([] {
+                            Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxEop);
+                        });
+                    }
+                });
                 break;
             }
             case PM4ItOpcode::DmaData: {

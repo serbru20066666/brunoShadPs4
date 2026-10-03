@@ -98,8 +98,9 @@ public:
     /// Evicts any images that overlap the unmapped range.
     void UnmapMemory(VAddr cpu_addr, size_t size);
 
-    /// Schedules a copy of pending images for download back to CPU memory.
-    void ProcessDownloadImages();
+    /// Schedules a copy of pending images for download back to CPU memory. With `defer`, the
+    /// data is written back once the GPU finishes, and the tick to wait for is returned.
+    std::optional<u64> ProcessDownloadImages(bool defer = false);
 
     /// Retrieves the image handle of the image with the provided attributes.
     [[nodiscard]] ImageId FindImage(ImageDesc& desc, bool exact_fmt = false);

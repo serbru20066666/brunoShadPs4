@@ -846,7 +846,7 @@ void NewFrame(bool is_reusing_frame) {
         // Opt-in performance log (BRUNO_PERF_LOG=1), written and flushed to perf_log.txt in
         // the working directory: every 5 s the average FPS, worst frame and frames over 50 ms,
         // plus a line per hitch, to compare builds and settings objectively.
-        static std::FILE* perf_file = [] () -> std::FILE* {
+        static std::FILE* perf_file = []() -> std::FILE* {
             const char* env = std::getenv("BRUNO_PERF_LOG");
             return env && env[0] == '1' ? std::fopen("perf_log.txt", "w") : nullptr;
         }();

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/debug.h"
+#include "common/elf_info.h"
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
 #include "core/memory.h"
@@ -18,7 +19,6 @@
 #include "video_core/renderer_vulkan/vk_shader_hle.h"
 #include "video_core/texture_cache/image_view.h"
 #include "video_core/texture_cache/texture_cache.h"
-#include "common/elf_info.h"
 
 namespace Vulkan {
 
@@ -48,6 +48,9 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
         const auto& serial = Common::ElfInfo::Instance().GameSerial();
         AmdGpu::g_force_no_msaa = serial == "CUSA01623" || serial == "CUSA01715";
         rt_sync_enabled = AmdGpu::g_force_no_msaa;
+        // GoW3 reads small GPU-written images on the CPU after every frame fence. Waiting for
+        // the GPU at each fence serialised CPU and GPU (40 fps at 1440p with the GPU ~30% busy).
+        defer_fences = AmdGpu::g_force_no_msaa;
         if (AmdGpu::g_force_no_msaa) {
             LOG_INFO(Render_Vulkan, "Host MSAA disabled for {} (GoW3 depth stripes fix)", serial);
         }
@@ -405,15 +408,49 @@ void Rasterizer::OnSubmit() {
         rt_sync.ClearRecords();
     }
     buffer_cache.TickFrame();
-    texture_cache.ProcessDownloadImages();
+    if (!defer_fences) {
+        // With deferred fences, downloads stay pending until the next fence, which is when
+        // the guest can rely on them.
+        texture_cache.ProcessDownloadImages();
+    }
     texture_cache.RunGarbageCollector();
     runtime.TickFrame();
 }
 
-void Rasterizer::OnFence() {
-    texture_cache.ProcessDownloadImages();
+std::optional<u64> Rasterizer::OnFence(bool allow_defer) {
+    if (!defer_fences || !allow_defer) {
+        texture_cache.ProcessDownloadImages();
+        return std::nullopt;
+    }
+    if (const auto tick = texture_cache.ProcessDownloadImages(true)) {
+        last_deferred_tick = *tick;
+        return tick;
+    }
+    // Fences must reach the guest in order: while an earlier one is still queued, queue this
+    // one behind it.
+    if (deferred_fences_pending.load(std::memory_order_acquire) > 0) {
+        return last_deferred_tick;
+    }
+    return std::nullopt;
 }
 
+void Rasterizer::SignalAfterFence(std::optional<u64> tick, Common::UniqueFunction<void>&& signal) {
+    if (!tick) {
+        signal();
+        return;
+    }
+    deferred_fences_pending.fetch_add(1, std::memory_order_acq_rel);
+    scheduler.DeferPriorityOperation(
+        [this, signal = std::move(signal)]() mutable {
+            signal();
+            deferred_fences_pending.fetch_sub(1, std::memory_order_acq_rel);
+        },
+        *tick);
+    // The worker runs operations in order: anything queued earlier for the tick still being
+    // recorded would hold this signal back until the next submission, while the guest may
+    // be waiting for it before submitting anything else. Submit now.
+    scheduler.Flush();
+}
 bool Rasterizer::BindResources(const Pipeline* pipeline) {
     if (IsComputeImageCopy(pipeline) || IsComputeMetaClear(pipeline) ||
         IsComputeImageClear(pipeline)) {

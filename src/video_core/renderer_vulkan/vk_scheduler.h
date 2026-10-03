@@ -445,6 +445,16 @@ public:
         priority_pending_ops_cv.notify_one();
     }
 
+    /// Same, but waits for a specific (already submitted or current) tick. Operations still run
+    /// in the order they were deferred.
+    void DeferPriorityOperation(Common::UniqueFunction<void>&& func, u64 tick) {
+        {
+            std::unique_lock lk(priority_pending_ops_mutex);
+            priority_pending_ops.emplace(std::move(func), tick);
+        }
+        priority_pending_ops_cv.notify_one();
+    }
+
     static std::mutex submit_mutex;
 
 private:

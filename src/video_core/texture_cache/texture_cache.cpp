@@ -68,29 +68,45 @@ TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler&
 
 TextureCache::~TextureCache() = default;
 
-void TextureCache::ProcessDownloadImages() {
+std::optional<u64> TextureCache::ProcessDownloadImages(bool defer) {
     std::unique_lock lk{download_images_mutex};
     if (download_images.empty()) {
-        return;
+        return std::nullopt;
     }
-    // Record every copy first and wait for the GPU once, not once per image. (Writing back
-    // asynchronously is not safe: GoW3 reads these images on the CPU right after.)
+    // Record every copy first and wait for the GPU once, not once per image.
     boost::container::small_vector<PendingDownload, 8> pending;
     for (const ImageId image_id : download_images) {
-        if (auto download = RecordImageDownload(image_id, false)) {
+        if (auto download = RecordImageDownload(image_id, defer)) {
             pending.push_back(*download);
         }
     }
     download_images.clear();
     if (pending.empty()) {
-        return;
+        return std::nullopt;
+    }
+    if (defer) {
+        // Write back from the scheduler's worker thread once the GPU is done, without making
+        // this thread wait. The caller must defer the fence it is signalling to the returned
+        // tick too, so the guest only sees the fence after this data (see Rasterizer::OnFence).
+        const u64 tick = scheduler.CurrentTick();
+        scheduler.DeferPriorityOperation([this, pending] {
+            for (const auto& [download, device_addr, size] : pending) {
+                download.Invalidate();
+                Core::Memory::Instance()->TryWriteBacking(std::bit_cast<u8*>(device_addr),
+                                                          download.mapped, size);
+                runtime.GetStagingPool().FreeDeferred(download);
+            }
+        });
+        scheduler.Flush();
+        return tick;
     }
     scheduler.Finish();
     for (const auto& [download, device_addr, size] : pending) {
         download.Invalidate();
-        Core::Memory::Instance()->TryWriteBacking(std::bit_cast<u8*>(device_addr),
-                                                  download.mapped, size);
+        Core::Memory::Instance()->TryWriteBacking(std::bit_cast<u8*>(device_addr), download.mapped,
+                                                  size);
     }
+    return std::nullopt;
 }
 
 void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
@@ -102,8 +118,8 @@ void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
     if (sync) {
         scheduler.Finish();
         download.Invalidate();
-        Core::Memory::Instance()->TryWriteBacking(std::bit_cast<u8*>(device_addr),
-                                                  download.mapped, download_size);
+        Core::Memory::Instance()->TryWriteBacking(std::bit_cast<u8*>(device_addr), download.mapped,
+                                                  download_size);
     } else {
         scheduler.DeferPriorityOperation([this, download, device_addr, download_size] {
             download.Invalidate();
