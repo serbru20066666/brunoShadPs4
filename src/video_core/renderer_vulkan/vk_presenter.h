@@ -3,10 +3,12 @@
 
 #pragma once
 
+#include <chrono>
 #include <condition_variable>
 
 #include "core/libraries/videoout/buffer.h"
 #include "imgui/imgui_texture.h"
+#include "video_core/renderer_vulkan/host_passes/frame_gen_pass.h"
 #include "video_core/renderer_vulkan/host_passes/fsr_pass.h"
 #include "video_core/renderer_vulkan/host_passes/fxaa_pass.h"
 #include "video_core/renderer_vulkan/host_passes/pp_pass.h"
@@ -102,7 +104,27 @@ public:
     void Present(Frame* frame, bool is_reusing_frame = false, bool is_game_frame = true);
     Frame* PrepareLastFrame();
 
+    /// With frame generation, a rendered frame is shown half a frame after the generated one
+    /// that precedes it. The present thread calls this once per vblank period to show it when
+    /// it comes due before `next_vblank`, sleeping until then if needed.
+    void PaceGeneratedFrames(std::chrono::steady_clock::time_point next_vblank);
+
 private:
+    enum class PresentKind {
+        Normal,   ///< Show the frame as is.
+        Generate, ///< Show the frame generated before this one and hold this one back.
+        Held,     ///< Show a frame that was being held back.
+    };
+
+    void PresentImage(Frame* frame, bool is_reusing_frame, bool is_game_frame, PresentKind kind);
+
+    void PresentHeldFrame();
+
+    void CountDisplayedFrame(bool generated);
+
+    /// Draws the loading screen shown while the game starts, before it presents anything.
+    void DrawLoadingScreen(std::string_view stage, u32 done, u32 total);
+
     Frame* GetRenderFrame();
 
     void RecreateFrame(Frame* frame, u32 width, u32 height);
@@ -121,6 +143,7 @@ private:
     HostPasses::FsrPass::Settings fsr_settings{};
     HostPasses::PostProcessingPass::Settings pp_settings{};
     HostPasses::PostProcessingPass pp_pass;
+    HostPasses::FrameGenPass frame_gen_pass;
     AmdGpu::Liverpool* liverpool;
     Scheduler draw_scheduler;
     Scheduler present_scheduler;
@@ -133,6 +156,12 @@ private:
     std::vector<Frame> present_frames;
     std::queue<Frame*> free_queue;
     Frame* last_submit_frame;
+    Frame* held_frame{};
+    std::chrono::steady_clock::time_point held_due{};
+    std::chrono::steady_clock::time_point last_game_frame_time{};
+    std::chrono::steady_clock::time_point displayed_window_start{};
+    u32 displayed_frames{};
+    u32 generated_frames{};
     std::mutex free_mutex;
     std::condition_variable free_cv;
     std::condition_variable_any frame_cv;

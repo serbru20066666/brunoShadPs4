@@ -8,4 +8,5 @@
 #include "imgui_fonts/notosanscjk_regular.ttc.g.cpp"
 #include "imgui_fonts/notosanssymbols2_regular.ttf.g.cpp"
 #include "imgui_fonts/notosansthai_regular.ttf.g.cpp"
+#include "imgui_fonts/poppins_medium.ttf.g.cpp"
 #include "imgui_fonts/proggyvector_regular.ttf.g.cpp"

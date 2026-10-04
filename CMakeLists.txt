@@ -213,8 +213,8 @@ execute_process(
 
 # Set Version
 set(EMULATOR_VERSION_MAJOR "0")
-set(EMULATOR_VERSION_MINOR "21")
-set(EMULATOR_VERSION_PATCH "1")
+set(EMULATOR_VERSION_MINOR "22")
+set(EMULATOR_VERSION_PATCH "0")
 
 set_source_files_properties(src/dist/shadps4.rc PROPERTIES COMPILE_DEFINITIONS "EMULATOR_VERSION_MAJOR=${EMULATOR_VERSION_MAJOR};EMULATOR_VERSION_MINOR=${EMULATOR_VERSION_MINOR};EMULATOR_VERSION_PATCH=${EMULATOR_VERSION_PATCH}")
 
@@ -1163,6 +1163,8 @@ set(VIDEO_CORE src/video_core/amdgpu/cb_db_extent.h
                src/video_core/renderer_vulkan/host_passes/fsr_pass.h
                src/video_core/renderer_vulkan/host_passes/fxaa_pass.cpp
                src/video_core/renderer_vulkan/host_passes/fxaa_pass.h
+               src/video_core/renderer_vulkan/host_passes/frame_gen_pass.cpp
+               src/video_core/renderer_vulkan/host_passes/frame_gen_pass.h
                src/video_core/renderer_vulkan/render_target_sync.cpp
                src/video_core/renderer_vulkan/render_target_sync.h
                src/video_core/renderer_vulkan/host_passes/pp_pass.cpp
@@ -1408,6 +1410,16 @@ endif()
 
 if (WIN32)
     target_sources(shadps4 PRIVATE src/dist/shadps4.rc)
+endif()
+
+if (WIN32)
+    # AMD FidelityFX SDK, for FSR 3 frame generation. Only its headers are compiled in: the
+    # prebuilt library is loaded at run time and has to sit next to the executable.
+    target_include_directories(shadps4 PRIVATE externals/ffx-api/include)
+    add_custom_command(TARGET shadps4 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/externals/ffx-api/bin/amd_fidelityfx_vk.dll
+            $<TARGET_FILE_DIR:shadps4>)
 endif()
 
 if (NOT MSVC)

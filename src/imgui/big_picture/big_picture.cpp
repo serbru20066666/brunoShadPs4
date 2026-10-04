@@ -18,13 +18,15 @@
 #include "imgui/big_picture/imgui_impl_sdl3_big_picture.h"
 #include "imgui/big_picture/imgui_impl_sdlrenderer3.h"
 #include "imgui/big_picture/settings_dialog_imgui.h"
+#include "imgui/big_picture/theme.h"
 #include "imgui/imgui_std.h"
+#include "imgui/renderer/font_data.h"
 #include "imgui/renderer/font_stack.h"
 #include "sdl_window.h"
 
 namespace BigPictureMode {
 
-constexpr float gameImageSize = 200.f;
+constexpr float gameImageSize = 260.f;
 
 bool done = false;
 bool showSettings = false;
@@ -68,61 +70,91 @@ std::filesystem::path UpdateChecker(const std::string sceItem, std::filesystem::
     return updatedPath;
 }
 
-void SetGameIcons(std::vector<IconInfo>& gameIcons) {
-    ImGuiStyle& style = ImGui::GetStyle();
+/// Draws the game grid: one card per game with its cover, its name and its two actions. Sets
+/// `settingsFor` to the game whose settings button was pressed.
+void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor) {
     const float maxAvailableWidth = ImGui::GetContentRegionAvail().x;
-    const float itemSpacing = style.ItemSpacing.x; // already scaled
-    const float padding = 10.0f * uiScale;
-    float rowContentWidth = gameImageSize * uiScale + itemSpacing;
+    const float pad = 18.0f * uiScale;
+    const float gap = 22.0f * uiScale;
+    const float cover = gameImageSize * uiScale;
+    const float line = ImGui::GetTextLineHeight();
+    const float frame = ImGui::GetFrameHeight();
+    const ImVec2 card{cover + pad * 2.0f,
+                      pad + cover + 12.0f * uiScale + line * 2.0f + 12.0f * uiScale + frame + pad};
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    float rowWidth = 0.0f;
 
     for (int i = 0; i < gameIcons.size(); i++) {
-        ImGui::BeginGroup();
-        std::string ButtonName = "Button" + std::to_string(i);
-        const char* ButtonNameChar = ButtonName.c_str();
-
-        bool buttonFocused = (ImGui::GetID(ButtonNameChar) == ImGui::GetFocusID());
-        if (buttonFocused) {
-            ImGui::PushStyleColor(ImGuiCol_Button,
-                                  ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered]);
-        }
-
-        ImTextureID id = gameIcons[i].textureId;
-        if (id != nullptr) {
-            if (ImGui::ImageButton(ButtonNameChar, id,
-                                   ImVec2(gameImageSize * uiScale, gameImageSize * uiScale))) {
-                done = true;
-                Core::FileSys::MntPoints::ignore_game_patches =
-                    ImGui::IsKeyDown(ImGuiKey::ImGuiKey_LeftCtrl);
-                runEbootPath = gameIcons[i].ebootPath;
+        if (i > 0) {
+            // Use same line if the next card fits, move to the next row if not
+            if (rowWidth + gap + card.x <= maxAvailableWidth) {
+                ImGui::SameLine(0.0f, gap);
+            } else {
+                ImGui::Dummy(ImVec2(0.0f, gap - ImGui::GetStyle().ItemSpacing.y));
+                rowWidth = 0.0f;
             }
         }
+        rowWidth += (rowWidth > 0.0f ? gap : 0.0f) + card.x;
 
-        if (buttonFocused) {
-            ImGui::PopStyleColor();
-        }
+        ImGui::PushID(i);
+        ImGui::BeginGroup();
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        const ImVec2 cover_min{pos.x + pad, pos.y + pad};
+        const ImVec2 cover_max{cover_min.x + cover, cover_min.y + cover};
 
-        // Scroll to item only when newly-focused
+        // The cover starts the game.
+        ImGui::SetCursorScreenPos(cover_min);
+        bool play = ImGui::InvisibleButton("cover", ImVec2(cover, cover));
+        const bool cover_hovered = ImGui::IsItemHovered() || ImGui::IsItemFocused();
         if (ImGui::IsItemFocused() && !gameIcons[i].focusState) {
             ImGui::SetScrollHereY(0.5f);
         }
-
         if (ImGui::IsWindowFocused()) {
             gameIcons[i].focusState = ImGui::IsItemFocused();
         }
 
-        ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + gameImageSize * uiScale);
+        draw_list->AddRectFilled(
+            pos, {pos.x + card.x, pos.y + card.y},
+            ImGui::GetColorU32(cover_hovered ? Theme::CardHovered : Theme::Card), 28.0f * uiScale);
+        if (ImTextureID id = gameIcons[i].textureId; id != nullptr) {
+            draw_list->AddImageRounded(id, cover_min, cover_max, {0.0f, 0.0f}, {1.0f, 1.0f},
+                                       IM_COL32_WHITE, 18.0f * uiScale);
+        } else {
+            draw_list->AddRectFilled(cover_min, cover_max, ImGui::GetColorU32(Theme::Chip),
+                                     16.0f * uiScale);
+        }
+
+        // Two lines for the name, cut off if it is longer.
+        const ImVec2 title_min{cover_min.x, cover_max.y + 12.0f * uiScale};
+        ImGui::SetCursorScreenPos(title_min);
+        ImGui::PushClipRect(title_min, {cover_max.x, title_min.y + line * 2.0f}, true);
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + cover);
         ImGui::TextWrapped("%s", gameIcons[i].title.c_str());
         ImGui::PopTextWrapPos();
-        ImGui::EndGroup();
+        ImGui::PopClipRect();
 
-        // Use same line if content fits horizontally, move to next line if not
-        rowContentWidth += (gameImageSize * uiScale + itemSpacing * 2 + padding);
-        if (rowContentWidth < maxAvailableWidth) {
-            ImGui::SameLine(0.0f, padding);
-        } else {
-            ImGui::Dummy(ImVec2(0.0f, padding));
-            rowContentWidth = gameImageSize * uiScale + itemSpacing;
+        ImGui::SetCursorScreenPos({cover_min.x, pos.y + card.y - pad - frame});
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                            ImVec2(16.0f * uiScale, ImGui::GetStyle().FramePadding.y));
+        play |= Theme::AccentButton("Play");
+        ImGui::SameLine(0.0f, 8.0f * uiScale);
+        if (ImGui::Button("Settings")) {
+            settingsFor = i;
         }
+        ImGui::PopStyleVar();
+
+        if (play) {
+            done = true;
+            Core::FileSys::MntPoints::ignore_game_patches =
+                ImGui::IsKeyDown(ImGuiKey::ImGuiKey_LeftCtrl);
+            runEbootPath = gameIcons[i].ebootPath;
+        }
+
+        // Make the group as large as the card, whatever was drawn inside.
+        ImGui::SetCursorScreenPos(pos);
+        ImGui::Dummy(card);
+        ImGui::EndGroup();
+        ImGui::PopID();
     }
 }
 
@@ -237,9 +269,7 @@ void Launch(char* executableName, bool sameProcess) {
         LOG_ERROR(ImGui, "SDL_INIT_GAMEPAD Error: {}", SDL_GetError());
     }
 
-    SDL_Window* window =
-        SDL_CreateWindow("shadPS4 Big Picture Mode", 1280, 720,
-                         EmulatorSettings.IsFullScreen() ? SDL_WINDOW_FULLSCREEN : 0);
+    SDL_Window* window = SDL_CreateWindow("brunoShadPs4", 1280, 800, SDL_WINDOW_RESIZABLE);
     if (window == nullptr) {
         LOG_ERROR(ImGui, "SDL Window Creation Error: {}", SDL_GetError());
         SDL_Quit();
@@ -261,8 +291,15 @@ void Launch(char* executableName, bool sameProcess) {
     cfgBase.OversampleH = 2;
     cfgBase.OversampleV = 1;
 
-    io.FontDefault = ImGui::FontStack::AddPrimaryUiFont(
-        io.Fonts, 64.0f, EmulatorSettings.GetConsoleLanguage(), cfgBase, true);
+    // Poppins for everything it covers, with the usual fonts merged in behind it for the rest.
+    static const ImWchar latin_ranges[] = {0x0020, 0x00FF, 0x0100, 0x017F, 0};
+    io.FontDefault = io.Fonts->AddFontFromMemoryCompressedTTF(
+        imgui_font_poppins_medium_compressed_data, imgui_font_poppins_medium_compressed_size, 64.0f,
+        &cfgBase, latin_ranges);
+    ImFontConfig cfgFallback = cfgBase;
+    cfgFallback.MergeMode = true;
+    ImGui::FontStack::AddPrimaryUiFont(io.Fonts, 64.0f, EmulatorSettings.GetConsoleLanguage(),
+                                       cfgFallback, true);
     io.FontGlobalScale = 0.5f;
     // size the big picture font atlas cap from the renderer limit
     const auto max_dim = SDL_GetNumberProperty(SDL_GetRendererProperties(renderer),
@@ -281,8 +318,7 @@ void Launch(char* executableName, bool sameProcess) {
         uiScale = EmulatorSettings.GetBigPictureScale() / 1000.f;
         sliderScale = uiScale;
         GetGameIconInfo(gameIcons);
-        SDL_SetWindowFullscreen(window,
-                                EmulatorSettings.IsFullScreen() ? SDL_WINDOW_FULLSCREEN : 0);
+        // The launcher always stays in a window; the full screen setting is for the games.
     };
     applySettings();
 
@@ -299,23 +335,7 @@ void Launch(char* executableName, bool sameProcess) {
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
 
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.06f, 0.06f, 0.06f, 1.00f)); // black
-        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.20f, 0.40f, 0.70f, 1.00f));   // blue
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered,
-                              ImVec4(0.25f, 0.50f, 0.85f, 1.00f)); // lighter blue
-        ImGui::PushStyleColor(ImGuiCol_SliderGrabActive,
-                              ImVec4(0.26f, 0.59f, 0.98f, 0.80f)); // another light blue
-        ImGui::PushStyleColor(ImGuiCol_SliderGrab,
-                              ImVec4(0.26f, 0.59f, 0.98f, 0.80f)); // another light blue
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 5.0f * uiScale);
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10.0f * uiScale, 10.0f * uiScale));
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f * uiScale, 10.0f * uiScale));
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.5f * uiScale);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f * uiScale, 20.0f * uiScale));
-        ImGui::PushStyleVar(ImGuiStyleVar_GrabMinSize, 20.0f * uiScale);
+        Theme::Push(uiScale);
 
         ImGuiViewport* viewport = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(viewport->WorkPos);
@@ -325,10 +345,9 @@ void Launch(char* executableName, bool sameProcess) {
             ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoScrollWithMouse;
 
         ImGui::Begin("Game Window", &done, window_flags);
-        ImGui::DrawPrettyBackground();
         ImGui::SetWindowFontScale(uiScale);
 
-        ImGuiChildFlags child_flags = ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened;
+        ImGuiChildFlags child_flags = ImGuiChildFlags_NavFlattened;
 
         ImGuiWindowFlags child_window_flags =
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
@@ -337,40 +356,31 @@ void Launch(char* executableName, bool sameProcess) {
             ImGui::SetNextWindowFocus();
         }
 
-        ImGui::BeginChild("ContentRegion", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()),
-                          child_flags, child_window_flags);
-
-        Overlay::TextCentered("Select Game");
-        ImGui::Dummy(ImVec2(0.0f, 10.f * uiScale));
-
-        if (ImGui::IsWindowAppearing()) {
-            ImGui::SetKeyboardFocusHere();
-        }
-
-        SetGameIcons(gameIcons);
-        ImGui::EndChild();
-        ImGui::Separator();
-
-        ImGui::SetNextItemWidth(300.0f * uiScale);
-
-        if (ImGui::IsWindowAppearing()) {
-            sliderScale = uiScale;
-        }
-        ImGui::SliderFloat("UI Scale", &sliderScale, 0.25f, 3.0f);
-
-        // Only update when user is not interacting with slider
-        if (ImGui::IsItemDeactivatedAfterEdit()) {
-            uiScale = sliderScale;
-        }
-
+        // Top bar: the name on the left, the two actions on the right.
+        ImGui::SetWindowFontScale(uiScale * 1.5f);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("brunoShadPs4");
+        ImGui::SetWindowFontScale(uiScale);
         ImGui::SameLine();
-
-        // Align buttons right
-        float buttonsWidth = ImGui::CalcTextSize("Settings").x + ImGui::CalcTextSize("Exit").x +
-                             ImGui::GetStyle().FramePadding.x * 4.0f +
-                             ImGui::GetStyle().ItemSpacing.x;
-        ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - buttonsWidth);
-
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", gameIcons.empty()
+                                      ? ""
+                                      : fmt::format("  {} {}", gameIcons.size(),
+                                                    gameIcons.size() == 1 ? "game" : "games")
+                                            .c_str());
+        ImGui::SameLine();
+        {
+            const float width =
+                ImGui::CalcTextSize("Add games").x + ImGui::CalcTextSize("Settings").x +
+                ImGui::GetStyle().FramePadding.x * 4.0f + ImGui::GetStyle().ItemSpacing.x;
+            ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - width);
+        }
+        if (ImGui::Button("Add games")) {
+            settingsWindow.Prepare();
+            settingsWindow.OpenFolders();
+            showSettings = true;
+        }
+        ImGui::SameLine();
         if (ImGui::Button("Settings")) {
             EmulatorSettings.SetBigPictureScale(static_cast<int>(uiScale * 1000));
             EmulatorSettings.Save();
@@ -378,44 +388,60 @@ void Launch(char* executableName, bool sameProcess) {
             showSettings = true;
         }
 
-        ImGui::SameLine();
+        ImGui::Dummy(ImVec2(0.0f, 8.f * uiScale));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+        ImGui::BeginChild("ContentRegion", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()),
+                          child_flags, child_window_flags);
+        ImGui::PopStyleColor();
 
-        if (ImGui::Button("Exit")) {
-            ImGui::OpenPopup("Confirm Exit");
+        if (ImGui::IsWindowAppearing()) {
+            ImGui::SetKeyboardFocusHere();
         }
 
-        ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-        ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-        if (ImGui::BeginPopupModal("Confirm Exit", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Text("This will exit shadPS4!\nAre you sure?");
-            ImGui::Separator();
-
-            if (ImGui::Button("OK", ImVec2(120 * uiScale, 0))) {
-                ImGui::CloseCurrentPopup();
-                done = true;
+        int settingsFor = -1;
+        SetGameIcons(gameIcons, settingsFor);
+        if (settingsFor >= 0) {
+            settingsWindow.Prepare();
+            settingsWindow.OpenProfile(gameIcons[settingsFor].serial, gameIcons[settingsFor].title);
+            showSettings = true;
+        }
+        if (gameIcons.empty()) {
+            ImGui::Dummy(ImVec2(0.0f, 40.f * uiScale));
+            Overlay::TextCentered("No games yet. Add the folder that contains your games.");
+            ImGui::Dummy(ImVec2(0.0f, 10.f * uiScale));
+            const char* label = "Add games folder";
+            const float width =
+                ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - width) * 0.5f);
+            if (Theme::AccentButton(label)) {
+                settingsWindow.Prepare();
+                settingsWindow.OpenFolders();
+                showSettings = true;
             }
-            ImGui::SameLine();
-
-            if (ImGui::Button("Cancel", ImVec2(120 * uiScale, 0))) {
-                ImGui::CloseCurrentPopup();
-            }
-
-            if (ImGui::IsWindowAppearing()) {
-                ImGui::SetItemDefaultFocus();
-            }
-
-            ImGui::EndPopup();
+        }
+        ImGui::EndChild();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.55f, 0.60f, 1.0f));
+        ImGui::SetNextItemWidth(150.0f * uiScale);
+        if (ImGui::IsWindowAppearing()) {
+            sliderScale = uiScale;
+        }
+        ImGui::SliderFloat("##scale", &sliderScale, 0.5f, 2.5f, "");
+        ImGui::SameLine();
+        ImGui::TextUnformatted("Size");
+        ImGui::PopStyleColor();
+        // Only update when user is not interacting with slider
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            uiScale = sliderScale;
         }
 
         if (showSettings) {
             settingsWindow.DrawSettings(&showSettings, applySettings);
         }
 
-        ImGui::PopStyleVar(8);
-        ImGui::PopStyleColor(5);
+        Theme::Pop();
         ImGui::End();
         ImGui::Render();
-        SDL_SetRenderDrawColor(renderer, 100, 100, 100, 255);
+        SDL_SetRenderDrawColor(renderer, 9, 9, 11, 255);
         SDL_RenderClear(renderer);
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
         SDL_RenderPresent(renderer);

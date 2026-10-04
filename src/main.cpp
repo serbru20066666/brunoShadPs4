@@ -112,15 +112,14 @@ int main(int argc, char* argv[]) {
     app.allow_extras();
 
     // ---- No-args behavior ----
-    if (argc == 1) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "shadPS4",
-                                 "This is a CLI application. Please use the '-b' flag for Big "
-                                 "Picture mode, or QTLauncher for a standalone GUI:\n"
-                                 "https://github.com/shadps4-emu/shadps4-qtlauncher/releases",
-                                 nullptr);
-        std::cout << app.help();
-        return -1;
+    // Opened without arguments, as by a double click: show the game launcher.
+    const bool open_launcher = argc == 1;
+#ifdef _WIN32
+    if (open_launcher) {
+        // The launcher is a window of its own: leave no console behind it.
+        FreeConsole();
     }
+#endif
 
     try {
         bool double_dash_found = false;
@@ -162,7 +161,7 @@ int main(int argc, char* argv[]) {
     EmulatorSettings.Load();
     UserSettings.Load();
 
-    if (bigPicture) {
+    if (bigPicture || open_launcher) {
         BigPictureMode::Launch(argv[0], sameProcess);
         return 0;
     }

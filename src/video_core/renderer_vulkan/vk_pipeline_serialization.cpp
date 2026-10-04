@@ -1,11 +1,14 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+
 #include "common/serdes.h"
 #include "core/emulator_settings.h"
 #include "shader_recompiler/frontend/fetch_shader.h"
 #include "shader_recompiler/info.h"
 #include "video_core/cache_storage.h"
+#include "video_core/loading_progress.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
@@ -340,34 +343,44 @@ void PipelineCache::WarmUp() {
     u32 num_pipelines{};
     u32 num_total_pipelines{};
 
+    // Read every key first, to know how much there is to compile and report progress on it.
+    std::vector<std::vector<u8>> keys;
     Storage::DataBase::Instance().ForEachBlob(
         Storage::BlobType::PipelineKey, [&](std::vector<u8>&& data) {
-            ++num_total_pipelines;
-
-            Serialization::Archive ar{std::move(data)};
-            Serialization::Reader pldata{ar};
-
-            u32 version{};
-            pldata.Read(version);
-            if (version != Serialization::PipelineKeyVersion) {
-                return;
-            }
-
-            u32 is_compute{};
-            pldata.Read(is_compute);
-
-            bool result{};
-            if (is_compute) {
-                result = LoadComputePipeline(ar);
-            } else {
-                result = LoadGraphicsPipeline(ar);
-            }
-
-            if (result) {
-                ++num_pipelines;
-            }
+            VideoCore::ReportLoading("Reading the shader cache");
+            keys.emplace_back(std::move(data));
         });
 
+    std::ranges::for_each(keys, [&](std::vector<u8>& data) {
+        VideoCore::ReportLoading("Compiling cached shaders", num_total_pipelines,
+                                 static_cast<u32>(keys.size()));
+        ++num_total_pipelines;
+
+        Serialization::Archive ar{std::move(data)};
+        Serialization::Reader pldata{ar};
+
+        u32 version{};
+        pldata.Read(version);
+        if (version != Serialization::PipelineKeyVersion) {
+            return;
+        }
+
+        u32 is_compute{};
+        pldata.Read(is_compute);
+
+        bool result{};
+        if (is_compute) {
+            result = LoadComputePipeline(ar);
+        } else {
+            result = LoadGraphicsPipeline(ar);
+        }
+
+        if (result) {
+            ++num_pipelines;
+        }
+    });
+
+    VideoCore::ReportLoading("Starting the game", 1, 1);
     LOG_INFO(Render, "Preloaded {} pipelines", num_pipelines);
     if (num_total_pipelines > num_pipelines) {
         LOG_WARNING(Render, "{} stale pipelines were found. Consider re-generating the cache",

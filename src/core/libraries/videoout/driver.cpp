@@ -357,6 +357,7 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
 
     while (!token.stop_requested()) {
         timer.Start();
+        const auto next_vblank = std::chrono::steady_clock::now() + vblank_period;
 
         if (DebugState.IsGuestThreadsPaused()) {
             DrawLastFrame();
@@ -405,6 +406,9 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
             vblank_status.tsc = Libraries::Kernel::sceKernelReadTsc();
             main_port.vblank_cv.notify_all();
         }
+
+        // With frame generation, the rendered frame goes out between two generated ones.
+        presenter->PaceGeneratedFrames(next_vblank);
 
         timer.End();
     }

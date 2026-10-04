@@ -5,7 +5,9 @@
 #include "common/elf_info.h"
 #include "common/io_file.h"
 #include "common/path_util.h"
+#include "common/scm_rev.h"
 #include "common/singleton.h"
+#include "common/thread.h"
 #include "core/debug_state.h"
 #include "core/devtools/layer.h"
 #include "core/emulator_settings.h"
@@ -18,6 +20,7 @@
 #include "imgui/shadnet_notifications_layer.h"
 #include "sdl_window.h"
 #include "video_core/buffer_cache/buffer.h"
+#include "video_core/loading_progress.h"
 #include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
@@ -42,6 +45,7 @@
 #include <sstream>
 #include <system_error>
 #include <vector>
+#include <SDL3/SDL_events.h>
 #include <imgui.h>
 #include <stb_image_write.h>
 #include <vk_mem_alloc.h>
@@ -468,8 +472,14 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
                EmulatorSettings.IsVkCrashDiagnosticEnabled()},
       draw_scheduler{instance}, present_scheduler{instance}, flip_scheduler{instance},
       swapchain{instance, window}, runtime{instance, draw_scheduler},
-      rasterizer{std::make_unique<Rasterizer>(instance, draw_scheduler, runtime, liverpool)},
+      rasterizer{(
+          VideoCore::loading_callback =
+              [this](std::string_view stage, u32 done, u32 total) {
+                  DrawLoadingScreen(stage, done, total);
+              },
+          std::make_unique<Rasterizer>(instance, draw_scheduler, runtime, liverpool))},
       texture_cache{rasterizer->GetTextureCache()} {
+    VideoCore::loading_callback = nullptr;
     const u32 num_images = swapchain.GetImageCount();
     const vk::Device device = instance.GetDevice();
 
@@ -492,6 +502,7 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     fsr_pass.Create(device, instance.GetAllocator(), num_images);
     fxaa_pass.Create(device, instance.GetAllocator(), num_images);
     pp_pass.Create(device, swapchain.GetSurfaceFormat().format);
+    frame_gen_pass.Create(instance);
 
     ImGui::Layer::AddLayer(Common::Singleton<Core::Devtools::Layer>::Instance());
     ImGui::Friends::Register();
@@ -593,6 +604,9 @@ void Presenter::RecreateFrame(Frame* frame, u32 width, u32 height) {
 }
 
 Frame* Presenter::PrepareLastFrame() {
+    // The last frame is the one being held back, if any: show it before drawing it again.
+    PresentHeldFrame();
+
     if (last_submit_frame == nullptr) {
         return nullptr;
     }
@@ -849,6 +863,172 @@ Frame* Presenter::PrepareBlankFrame(bool present_thread) {
 }
 
 void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame) {
+    // A rendered frame that is still being held back goes out before anything newer.
+    PresentHeldFrame();
+
+    const bool generate = !is_reusing_frame && is_game_frame && frame_gen_pass.IsAvailable() &&
+                          !EmulatorSettings.IsNullGPU() &&
+                          !Libraries::SystemService::IsSplashVisible();
+    PresentImage(frame, is_reusing_frame, is_game_frame,
+                 generate ? PresentKind::Generate : PresentKind::Normal);
+}
+
+void Presenter::PresentHeldFrame() {
+    if (Frame* frame = std::exchange(held_frame, nullptr)) {
+        PresentImage(frame, false, true, PresentKind::Held);
+    }
+}
+
+void Presenter::PaceGeneratedFrames(std::chrono::steady_clock::time_point next_vblank) {
+    if (!held_frame) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (held_due > now) {
+        if (held_due > next_vblank - std::chrono::milliseconds(1)) {
+            // Due in a later vblank period: that one shows it.
+            return;
+        }
+        Common::AccurateSleep(held_due - now, nullptr, false);
+    }
+    PresentHeldFrame();
+}
+
+void Presenter::CountDisplayedFrame(bool generated) {
+    const auto now = std::chrono::steady_clock::now();
+    ++displayed_frames;
+    generated_frames += generated;
+    const std::chrono::duration<float> elapsed = now - displayed_window_start;
+    if (elapsed.count() < 0.5f) {
+        return;
+    }
+    DebugState.DisplayedFramerate =
+        generated_frames > 0 ? static_cast<float>(displayed_frames) / elapsed.count() : 0.0f;
+    displayed_window_start = now;
+    displayed_frames = 0;
+    generated_frames = 0;
+}
+
+void Presenter::DrawLoadingScreen(std::string_view stage, u32 done, u32 total) {
+    // The work being reported is what matters: draw at most thirty times a second, except for
+    // the last step so that the screen ends on it. This runs while the presenter is still being
+    // constructed, so the time of the last draw cannot be one of its members.
+    static std::chrono::steady_clock::time_point last_loading_draw{};
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_loading_draw < std::chrono::milliseconds(33) && (total == 0 || done < total)) {
+        return;
+    }
+    last_loading_draw = now;
+
+    // This runs on the thread that owns the window while it is busy loading. Collecting the
+    // window's events keeps the system from flagging it as not responding; they are handled
+    // once the main loop starts.
+    SDL_PumpEvents();
+
+    if (window.GetWidth() != swapchain.GetWidth() || window.GetHeight() != swapchain.GetHeight()) {
+        swapchain.Recreate(window.GetWidth(), window.GetHeight());
+    }
+    if (!swapchain.AcquireNextImage()) {
+        swapchain.Recreate(window.GetWidth(), window.GetHeight());
+        if (!swapchain.AcquireNextImage()) {
+            return;
+        }
+    }
+
+    ImGui::Core::NewFrame(true);
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    const float scale = std::max(display.y / 1080.0f, 0.5f);
+    ImGui::SetNextWindowPos({0.0f, 0.0f});
+    ImGui::SetNextWindowSize(display);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.035f, 0.035f, 0.043f, 1.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    if (ImGui::Begin("##loading", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking)) {
+        const auto centered = [&](const std::string& text, float y, float font_scale, ImU32 color) {
+            ImGui::SetWindowFontScale(font_scale * scale);
+            const float width = ImGui::CalcTextSize(text.c_str()).x;
+            ImGui::SetCursorPos({(display.x - width) * 0.5f, y});
+            ImGui::PushStyleColor(ImGuiCol_Text, color);
+            ImGui::TextUnformatted(text.c_str());
+            ImGui::PopStyleColor();
+        };
+        const float middle = display.y * 0.5f;
+        centered("brunoShadPs4", middle - 150.0f * scale, 3.0f, IM_COL32(255, 255, 255, 255));
+        centered(fmt::format("version {}", Common::g_version), middle - 80.0f * scale, 1.2f,
+                 IM_COL32(150, 150, 160, 255));
+        if (const auto title = Common::ElfInfo::Instance().Title(); !title.empty()) {
+            centered(std::string{title}, middle - 20.0f * scale, 1.6f,
+                     IM_COL32(220, 220, 230, 255));
+        }
+
+        // Progress bar, or a block sliding from side to side while the amount is not known.
+        const float bar_width = display.x * 0.4f;
+        const float bar_height = 10.0f * scale;
+        const ImVec2 bar_min{(display.x - bar_width) * 0.5f, middle + 50.0f * scale};
+        const ImVec2 bar_max{bar_min.x + bar_width, bar_min.y + bar_height};
+        auto* draw_list = ImGui::GetWindowDrawList();
+        draw_list->AddRectFilled(bar_min, bar_max, IM_COL32(40, 40, 46, 255), bar_height * 0.5f);
+        float from = 0.0f;
+        float to = 0.0f;
+        if (total > 0) {
+            to = std::min(static_cast<float>(done) / static_cast<float>(total), 1.0f);
+        } else {
+            const float phase = static_cast<float>(std::fmod(ImGui::GetTime(), 1.6) / 1.6);
+            from = (phase < 0.5f ? phase * 2.0f : 2.0f - phase * 2.0f) * 0.8f;
+            to = from + 0.2f;
+        }
+        if (to > from) {
+            draw_list->AddRectFilled({bar_min.x + bar_width * from, bar_min.y},
+                                     {bar_min.x + bar_width * to, bar_max.y},
+                                     IM_COL32(199, 237, 240, 255), bar_height * 0.5f);
+        }
+        const std::string status = total > 0 ? fmt::format("{}  {} / {}", stage, done, total)
+                                             : fmt::format("{}...", stage);
+        centered(status, bar_max.y + 18.0f * scale, 1.1f, IM_COL32(180, 180, 190, 255));
+        ImGui::SetWindowFontScale(1.0f);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+
+    auto& scheduler = present_scheduler;
+    const auto cmdbuf = scheduler.CommandBuffer();
+    const vk::Image image = swapchain.Image();
+    const auto transition = [&](vk::ImageLayout from, vk::ImageLayout to) {
+        const vk::ImageMemoryBarrier barrier{
+            .srcAccessMask = vk::AccessFlagBits::eNone,
+            .dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
+            .oldLayout = from,
+            .newLayout = to,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange{
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .levelCount = 1,
+                .layerCount = 1,
+            },
+        };
+        cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
+                               vk::PipelineStageFlagBits::eAllCommands, {}, {}, {}, barrier);
+    };
+    transition(vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal);
+    ImGui::Core::Render(cmdbuf, swapchain.ImageView(), swapchain.GetExtent());
+    transition(vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::ePresentSrcKHR);
+
+    SubmitInfo info{};
+    info.AddWait(swapchain.GetImageAcquiredSemaphore());
+    info.AddSignal(swapchain.GetPresentReadySemaphore());
+    scheduler.Flush(info);
+    std::scoped_lock submit_lock{Scheduler::submit_mutex};
+    if (!swapchain.Present()) {
+        swapchain.Recreate(window.GetWidth(), window.GetHeight());
+    }
+}
+
+void Presenter::PresentImage(Frame* frame, bool is_reusing_frame, bool is_game_frame,
+                             PresentKind kind) {
     // Free the frame for reuse
     const auto free_frame = [&] {
         if (!is_reusing_frame) {
@@ -874,14 +1054,8 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         }
     }
 
-    // Reset fence for queue submission. Do it here instead of GetRenderFrame() because we may
-    // skip frame because of slow swapchain recreation. If a frame skip occurs, we skip signal
-    // the frame's present fence and future GetRenderFrame() call will hang waiting for this frame.
-    const auto reset_result = instance.GetDevice().resetFences(frame->present_done);
-    ASSERT_MSG(reset_result == vk::Result::eSuccess,
-               "Unexpected error resetting present done fence: {}", vk::to_string(reset_result));
-
-    ImGuiID dockId = ImGui::Core::NewFrame(is_reusing_frame);
+    // A held frame was already counted as a new one when its generated frame went out.
+    ImGuiID dockId = ImGui::Core::NewFrame(is_reusing_frame || kind == PresentKind::Held);
 
     const vk::Image swapchain_image = swapchain.Image();
     const vk::ImageView swapchain_image_view = swapchain.ImageView();
@@ -890,6 +1064,38 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     const auto cmdbuf = scheduler.CommandBuffer();
     const u32 capture_with_overlays_count = VideoCore::ConsumeWithOverlaysScreenshotRequests();
     std::optional<ScreenshotReadback> pending_screenshot;
+
+    // With frame generation the frame in between the previous one and this one is shown now,
+    // and this one half a frame later.
+    std::optional<ImTextureID> generated_texture;
+    if (kind == PresentKind::Generate) {
+        const auto now = std::chrono::steady_clock::now();
+        const auto since_last = now - last_game_frame_time;
+        last_game_frame_time = now;
+        // Frames arrive on vblank boundaries, so the time between two is a whole number of
+        // periods. Much longer than that and the previous frame is too old to blend with.
+        const std::chrono::nanoseconds vblank{1'000'000'000 /
+                                              EmulatorSettings.GetVblankFrequency()};
+        const s64 periods = std::clamp<s64>((since_last + vblank / 2) / vblank, 1, 4);
+        const auto frame_time = vblank * periods;
+        const bool reset = since_last > vblank * 9 / 2;
+        generated_texture = frame_gen_pass.Render(
+            cmdbuf, frame->image, {frame->width, frame->height}, frame->is_hdr,
+            std::chrono::duration<float, std::milli>(frame_time).count(), reset);
+        held_due = now + frame_time / 2;
+    }
+    const bool generated = generated_texture.has_value();
+
+    // Reset fence for queue submission. Do it here instead of GetRenderFrame() because we may
+    // skip frame because of slow swapchain recreation. If a frame skip occurs, we skip signal
+    // the frame's present fence and future GetRenderFrame() call will hang waiting for this frame.
+    // A frame that is held back keeps its fence until it is shown itself.
+    if (!generated) {
+        const auto reset_result = instance.GetDevice().resetFences(frame->present_done);
+        ASSERT_MSG(reset_result == vk::Result::eSuccess,
+                   "Unexpected error resetting present done fence: {}",
+                   vk::to_string(reset_result));
+    }
 
     if (EmulatorSettings.IsVkHostMarkersEnabled()) {
         cmdbuf.beginDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT{
@@ -940,9 +1146,13 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
 
         bool swapchain_copied_for_screenshot = false;
 
-        cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput,
-                               vk::PipelineStageFlagBits::eColorAttachmentOutput,
-                               vk::DependencyFlagBits::eByRegion, {}, {}, pre_barriers);
+        // A generated frame is drawn from its own texture: the rendered one stays as it is
+        // until it is shown.
+        cmdbuf.pipelineBarrier(
+            vk::PipelineStageFlagBits::eColorAttachmentOutput,
+            vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::DependencyFlagBits::eByRegion,
+            {}, {},
+            vk::ArrayProxy<const vk::ImageMemoryBarrier>(generated ? 1u : 2u, pre_barriers.data()));
 
         { // Draw the game
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0.0f});
@@ -951,7 +1161,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
             ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0f, 0.0f, 0.0f, 1.0f));
             ImGui::SetNextWindowDockID(dockId, ImGuiCond_Once);
             if (ImGui::Begin("Display##game_display", nullptr, ImGuiWindowFlags_NoNav)) {
-                auto game_texture = frame->imgui_texture;
+                auto game_texture = generated ? *generated_texture : frame->imgui_texture;
                 auto game_width = frame->width;
                 auto game_height = frame->height;
 
@@ -1077,7 +1287,9 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     info.AddWait(swapchain.GetImageAcquiredSemaphore());
     info.AddWait(frame->ready_semaphore, frame->ready_tick);
     info.AddSignal(swapchain.GetPresentReadySemaphore());
-    info.AddSignal(frame->present_done);
+    if (!generated) {
+        info.AddSignal(frame->present_done);
+    }
     scheduler.Flush(info);
 
     // Present to swapchain.
@@ -1088,7 +1300,17 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         }
     }
 
+    if (generated) {
+        // The rendered frame follows half a frame later.
+        held_frame = frame;
+        CountDisplayedFrame(true);
+        return;
+    }
+
     free_frame();
+    if (!is_reusing_frame) {
+        CountDisplayedFrame(false);
+    }
     if (!is_reusing_frame && is_game_frame) {
         DebugState.IncFlipFrameNum();
     }

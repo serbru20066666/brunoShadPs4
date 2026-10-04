@@ -11,6 +11,7 @@ set(FONT_LIST
     NotoSans-Regular.ttf
     NotoSansSymbols2-Regular.ttf
     NotoSansThai-Regular.ttf
+    Poppins-Medium.ttf
     ProggyVector-Regular.ttf
 )
 

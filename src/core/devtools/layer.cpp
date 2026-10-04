@@ -287,7 +287,13 @@ void L::DrawSimple() {
     } else {
         PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f)); // White
     }
-    Text("%d FPS (%.1f ms)", static_cast<int>(std::round(frameRate)), 1000.0f / frameRate);
+    if (const float displayed = DebugState.DisplayedFramerate; displayed > 0.0f) {
+        // Frame generation is on: the frames the game rendered, then the ones on screen.
+        Text("%d FPS (%.1f ms) | FG %d FPS", static_cast<int>(std::round(frameRate)),
+             1000.0f / frameRate, static_cast<int>(std::round(displayed)));
+    } else {
+        Text("%d FPS (%.1f ms)", static_cast<int>(std::round(frameRate)), 1000.0f / frameRate);
+    }
     PopStyleColor();
 }
 

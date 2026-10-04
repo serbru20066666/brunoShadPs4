@@ -1,6 +1,8 @@
 //  SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 //  SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <array>
 #include <map>
 #include <ranges>
 #include <ImGuiFileDialog.h>
@@ -14,11 +16,11 @@
 #include "core/devtools/layer.h"
 #include "imgui/imgui_std.h"
 #include "settings_dialog_imgui.h"
+#include "theme.h"
 
 CMRC_DECLARE(res);
 
 constexpr float gameImageSize = 200.f;
-constexpr float settingsIconSize = 125.f;
 
 namespace ImGuiEmuSettings {
 
@@ -57,6 +59,10 @@ void SettingsWindow::LoadSettings(std::string profile) {
     windowWidthSetting = EmulatorSettings.GetWindowWidth();
     hdrAllowedSetting = EmulatorSettings.IsHdrAllowed();
     fsrEnabledSetting = EmulatorSettings.IsFsrEnabled();
+    frameGenerationSetting = EmulatorSettings.IsFrameGenerationEnabled();
+    fxaaSetting = EmulatorSettings.IsFxaaEnabled();
+    directReadbacksSetting = EmulatorSettings.IsDirectReadbacksEnabled();
+    renderTargetSyncSetting = EmulatorSettings.IsRenderTargetSyncEnabled();
     rcasEnabledSetting = EmulatorSettings.IsRcasEnabled();
     rcasAttenuationSetting = static_cast<float>(EmulatorSettings.GetRcasAttenuation() * 0.001f);
 
@@ -113,6 +119,10 @@ void SettingsWindow::SaveSettings(std::string profile) {
     EmulatorSettings.SetWindowWidth(windowWidthSetting, isSpecific);
     EmulatorSettings.SetHdrAllowed(hdrAllowedSetting, isSpecific);
     EmulatorSettings.SetFsrEnabled(fsrEnabledSetting, isSpecific);
+    EmulatorSettings.SetFrameGenerationEnabled(frameGenerationSetting, isSpecific);
+    EmulatorSettings.SetFxaaEnabled(fxaaSetting, isSpecific);
+    EmulatorSettings.SetDirectReadbacksEnabled(directReadbacksSetting, isSpecific);
+    EmulatorSettings.SetRenderTargetSyncEnabled(renderTargetSyncSetting, isSpecific);
     EmulatorSettings.SetRcasEnabled(rcasEnabledSetting, isSpecific);
     EmulatorSettings.SetRcasAttenuation(static_cast<int>(rcasAttenuationSetting * 1000),
                                         isSpecific);
@@ -226,6 +236,56 @@ SettingsWindow::SettingsWindow(bool gameRunning) : isGameRunning(gameRunning) {
     customConfigFound ? LoadSettings(runningGameSerial) : LoadSettings("Global");
 }
 
+namespace {
+
+/// Settings found to work well for the games tuned with this fork, on the graphics page.
+struct Suggested {
+    std::string_view serial;
+    int readbacks_mode;
+    bool direct_readbacks;
+    bool fxaa;
+    bool frame_generation;
+};
+constexpr std::array SuggestedSettings{
+    Suggested{"CUSA01623", 0, false, true, true},  // God of War III Remastered
+    Suggested{"CUSA00004", 2, true, false, false}, // inFamous Second Son
+};
+
+const Suggested* FindSuggested(const std::string& profile) {
+    const auto it = std::ranges::find_if(SuggestedSettings, [&](const Suggested& suggested) {
+        return profile.starts_with(suggested.serial);
+    });
+    return it != SuggestedSettings.end() ? &*it : nullptr;
+}
+
+} // namespace
+
+bool SettingsWindow::HasSuggested() const {
+    return FindSuggested(currentProfile) != nullptr;
+}
+
+void SettingsWindow::ApplySuggested() {
+    const Suggested* suggested = FindSuggested(currentProfile);
+    if (!suggested) {
+        return;
+    }
+    fullscreenModeSetting = GetComboIndex("Fullscreen", fullscreenModeOptions);
+    presentModeSetting = GetComboIndex("Immediate", presentModeOptions);
+    fsrEnabledSetting = true;
+    rcasEnabledSetting = true;
+    readbacksModeSetting = suggested->readbacks_mode;
+    directReadbacksSetting = suggested->direct_readbacks;
+    fxaaSetting = suggested->fxaa;
+    frameGenerationSetting = suggested->frame_generation;
+    currentCategory = SettingsCategory::Graphics;
+}
+
+void SettingsWindow::OpenProfile(const std::string& serial, const std::string& title) {
+    currentProfile = serial + " - " + title;
+    LoadSettings(serial);
+    currentCategory = SettingsCategory::Graphics;
+}
+
 void SettingsWindow::Prepare() {
     uiScale = EmulatorSettings.GetBigPictureScale() / 1000.f;
 }
@@ -240,30 +300,13 @@ void SettingsWindow::DeInit() {
     }
 }
 void SettingsWindow::DrawSettings(bool* open, const std::function<void()>& applySettings) {
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.06f, 0.06f, 0.06f, 1.00f)); // black
-    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.20f, 0.40f, 0.70f, 1.00f));   // blue
-    ImGui::PushStyleColor(ImGuiCol_HeaderHovered,
-                          ImVec4(0.25f, 0.50f, 0.85f, 1.00f)); // lighter blue
-    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive,
-                          ImVec4(0.26f, 0.59f, 0.98f, 0.80f)); // another light blue
-    ImGui::PushStyleColor(ImGuiCol_SliderGrab,
-                          ImVec4(0.26f, 0.59f, 0.98f, 0.80f)); // another light blue
-
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 5.0f * uiScale);
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10.0f * uiScale, 10.0f * uiScale));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f * uiScale, 10.0f * uiScale));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.5f * uiScale);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f * uiScale, 20.0f * uiScale));
-    ImGui::PushStyleVar(ImGuiStyleVar_GrabMinSize, 20.0f * uiScale);
+    BigPictureMode::Theme::Push(uiScale);
 
     SetupWindow();
     DrawCategoryTabs();
     DrawMainContent(open, applySettings);
 
-    ImGui::PopStyleVar(8);
-    ImGui::PopStyleColor(5);
+    BigPictureMode::Theme::Pop();
 
     ImGui::End();
 }
@@ -275,7 +318,6 @@ void SettingsWindow::SetupWindow() {
 
     ImGui::Begin("Settings", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoScrollWithMouse);
-    ImGui::DrawPrettyBackground();
     ImGui::SetWindowFontScale(uiScale);
 
     if (ImGui::IsWindowAppearing()) {
@@ -304,12 +346,10 @@ void SettingsWindow::SetupWindow() {
 }
 
 void SettingsWindow::DrawCategoryTabs() {
-    ImVec4 settingsColor = ImVec4(0.1f, 0.1f, 0.12f, 0.8f); // Darker gray
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, settingsColor);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
 
-    float vertSize = (settingsIconSize * uiScale + ImGui::CalcTextSize("Profiles").y) +
-                     ImGui::GetStyle().FramePadding.y * 4.f + 20.0 * uiScale;
-    ImGuiChildFlags child_flags = ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened;
+    float vertSize = ImGui::GetFrameHeight() + 6.0f * uiScale;
+    ImGuiChildFlags child_flags = ImGuiChildFlags_NavFlattened;
 
     ImGuiWindowFlags window_flags =
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
@@ -317,7 +357,7 @@ void SettingsWindow::DrawCategoryTabs() {
 
     ImGui::BeginChild("Categories", ImVec2(0, vertSize), child_flags, window_flags);
 
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(30.0f * uiScale, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f * uiScale, 0.0f));
 
     // Must add categories in enum order for L1/R1 to work correctly
     if (!isGameRunning) {
@@ -343,50 +383,34 @@ void SettingsWindow::DrawCategoryTabs() {
 void SettingsWindow::AddCategory(std::string name,
                                  std::variant<SDL_Texture*, ImGui::RefCountedTexture> texture,
                                  SettingsCategory category) {
+    // Tabs are chips: the selected one is filled with the accent colour.
     ImGui::SameLine();
-    ImGui::BeginGroup();
-
-    // make button appear hovered as long as category is selected, otherwise dull its hovered color
-    currentCategory == category
-        ? ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered])
-        : ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.235f, 0.392f, 0.624f, 1.00f));
-
-    ImTextureID id = nullptr;
-    if (std::holds_alternative<SDL_Texture*>(texture)) {
-        id = ImTextureID(std::get<SDL_Texture*>(texture));
-    } else if (std::holds_alternative<ImGui::RefCountedTexture>(texture)) {
-        id = std::get<ImGui::RefCountedTexture>(texture).GetTexture().im_id;
-    }
-
-    if (id != nullptr) {
-        if (ImGui::ImageButton(name.c_str(), id,
-                               ImVec2(settingsIconSize * uiScale, settingsIconSize * uiScale))) {
+    const bool selected = currentCategory == category;
+    if (selected) {
+        if (BigPictureMode::Theme::AccentButton(name.c_str())) {
             currentCategory = category;
         }
+        return;
     }
-
+    ImGui::PushStyleColor(ImGuiCol_Text, BigPictureMode::Theme::TextDim);
+    const bool pressed = ImGui::Button(name.c_str());
     ImGui::PopStyleColor();
-
-    ImGui::SetCursorPosX(
-        (ImGui::GetCursorPosX() +
-         (settingsIconSize * uiScale - ImGui::CalcTextSize(name.c_str()).x) * 0.5f) +
-        ImGui::GetStyle().FramePadding.x);
-    ImGui::Text("%s", name.c_str());
-    ImGui::EndGroup();
+    if (pressed) {
+        currentCategory = category;
+    }
 }
 
 void SettingsWindow::DrawMainContent(bool* open, const std::function<void()>& applySettings) {
-    ImVec4 settingsColor = ImVec4(0.1f, 0.1f, 0.12f, 0.8f); // Darker gray
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, settingsColor);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, BigPictureMode::Theme::Panel);
 
     std::string centeredText;
     currentCategory == SettingsCategory::Folders
-        ? centeredText = "Manage shadPS4 Game Folders"
-        : centeredText = "Selected Profile: " + currentProfile;
+        ? centeredText = "Folders that contain your games"
+        : centeredText = currentProfile == "Global" ? "Editing: Global settings (all games)"
+                                                    : "Editing: " + currentProfile.substr(12);
 
-    ImGui::Separator();
-    Overlay::TextCentered(centeredText.c_str());
-    ImGui::Separator();
+    ImGui::Dummy(ImVec2(0.0f, 2.0f * uiScale));
+    ImGui::TextDisabled("%s", centeredText.c_str());
 
     if (currentCategory == SettingsCategory::Profiles) {
         DrawProfileSelector();
@@ -398,19 +422,12 @@ void SettingsWindow::DrawMainContent(bool* open, const std::function<void()>& ap
 
     ImGui::PopStyleColor();
 
-    ImGui::Separator();
-    ImGui::SetNextItemWidth(300.0f * uiScale);
-    static float sliderScale2 = 1.0f;
-    if (ImGui::IsWindowAppearing()) {
-        sliderScale2 = uiScale;
+    if (HasSuggested()) {
+        if (ImGui::Button("Use suggested settings")) {
+            ApplySuggested();
+        }
+        ImGui::SameLine();
     }
-
-    ImGui::SliderFloat("UI Scale", &sliderScale2, 0.25f, 3.0f);
-    // Only update when user is not interacting with slider
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
-        uiScale = sliderScale2;
-    }
-    ImGui::SameLine();
 
     // Align buttons right
     float buttonsWidth = ImGui::CalcTextSize("Save").x + ImGui::CalcTextSize("Cancel").x +
@@ -418,7 +435,9 @@ void SettingsWindow::DrawMainContent(bool* open, const std::function<void()>& ap
                          ImGui::GetStyle().ItemSpacing.x * 2;
     ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - buttonsWidth);
 
-    if (ImGui::Button("Save")) {
+    // The one action that matters stands out.
+    const bool save_clicked = BigPictureMode::Theme::AccentButton("Save");
+    if (save_clicked) {
         closeOnSave = true;
         ImGui::OpenPopup("Save Confirmation");
     }
@@ -473,8 +492,7 @@ void SettingsWindow::DrawProfileSelector() {
     ImGuiWindowFlags window_flags =
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
 
-    ImVec4 settingsColor = ImVec4(0.1f, 0.1f, 0.12f, 0.8f); // Darker gray
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, settingsColor);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, BigPictureMode::Theme::Panel);
     ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.0f, 0.5f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.0f);
@@ -484,53 +502,119 @@ void SettingsWindow::DrawProfileSelector() {
 
     ImGui::PopStyleColor();
 
-    if (ImGui::BeginTable("ProfilesTable", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders)) {
-        ImGui::TableSetupColumn("CreateDeleteButton", ImGuiTableColumnFlags_WidthFixed,
-                                400.0f * uiScale);
-        ImGui::TableSetupColumn("Profile");
+    // One card per set of settings: what it is, whether the game has settings of its own, and
+    // which one is being edited.
+    ImGui::Dummy(ImVec2(0.0f, 4.0f * uiScale));
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 16.0f * uiScale);
+    ImGui::TextUnformatted("Which settings do you want to change?");
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 16.0f * uiScale);
+    ImGui::TextDisabled(
+        "Global applies to every game. A game with its own settings ignores Global.");
+    ImGui::Dummy(ImVec2(0.0f, 6.0f * uiScale));
 
-        for (int i = 0; i < profileIcons.size(); i++) {
-            const std::filesystem::path customConfigFile =
-                Common::FS::GetUserPath(Common::FS::PathType::CustomConfigs) /
-                (profileIcons[i].serial + ".json");
-            const bool gameConfigExists = std::filesystem::exists(customConfigFile);
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            std::string deleteButtonLabel = "Delete game-specific config##" + std::to_string(i);
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    const float margin = 16.0f * uiScale;
+    const float line = ImGui::GetTextLineHeight();
+    const float card_height = line * 2.0f + 6.0f * uiScale + 36.0f * uiScale;
+    const float rounding = 22.0f * uiScale;
+    const ImU32 text_color = ImGui::GetColorU32(ImGuiCol_Text);
+    const ImU32 dim_color = IM_COL32(140, 140, 150, 255);
+    const ImU32 accent = ImGui::GetColorU32(BigPictureMode::Theme::Accent);
 
-            if (gameConfigExists) {
-                // Different shades of red depending on button state
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.0f, 0.0f, 1.0f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.0f, 0.0f, 1.0f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.5f, 0.0f, 0.0f, 1.0f));
+    // A fully rounded label, right aligned at `right`. Returns its left edge.
+    const auto pill = [&](const char* text, float right, float center_y, ImU32 fill, ImU32 color) {
+        const ImVec2 size = ImGui::CalcTextSize(text);
+        const float pad = 12.0f * uiScale;
+        const ImVec2 min{right - size.x - pad * 2.0f, center_y - line * 0.5f - 5.0f * uiScale};
+        const ImVec2 max{right, center_y + line * 0.5f + 5.0f * uiScale};
+        draw_list->AddRectFilled(min, max, fill, (max.y - min.y) * 0.5f);
+        draw_list->AddText({min.x + pad, center_y - line * 0.5f}, color, text);
+        return min.x;
+    };
 
-                if (ImGui::Button(deleteButtonLabel.c_str(),
-                                  ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
-                    deleteProfileIndex = i;
-                }
+    for (int i = 0; i < profileIcons.size(); i++) {
+        const bool is_global = i == 0;
+        const std::filesystem::path customConfigFile =
+            Common::FS::GetUserPath(Common::FS::PathType::CustomConfigs) /
+            (profileIcons[i].serial + ".json");
+        const bool gameConfigExists = !is_global && std::filesystem::exists(customConfigFile);
+        const std::string profileLabel =
+            is_global ? "Global" : profileIcons[i].serial + " - " + profileIcons[i].title;
+        const bool selected = currentProfile == profileLabel;
 
-                ImGui::PopStyleColor(3);
+        ImGui::PushID(i);
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + margin);
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        const float width = ImGui::GetContentRegionAvail().x - margin;
+        const float reset_width =
+            gameConfigExists
+                ? ImGui::CalcTextSize("Remove").x + ImGui::GetStyle().FramePadding.x * 2.0f + margin
+                : 0.0f;
+
+        const bool clicked =
+            ImGui::InvisibleButton("card", ImVec2(width - reset_width, card_height));
+        const bool hovered = ImGui::IsItemHovered() || ImGui::IsItemFocused();
+        const ImVec2 max{pos.x + width, pos.y + card_height};
+        draw_list->AddRectFilled(pos, max,
+                                 ImGui::GetColorU32(hovered ? ImVec4(0.19f, 0.19f, 0.22f, 1.0f)
+                                                            : BigPictureMode::Theme::Chip),
+                                 rounding);
+        if (selected) {
+            draw_list->AddRect(pos, max, accent, rounding, 0, 2.0f * uiScale);
+        }
+
+        const std::string title = is_global ? "Global settings" : profileIcons[i].title;
+        const std::string subtitle =
+            is_global
+                ? "Used by every game that has no settings of its own"
+                : profileIcons[i].serial + (gameConfigExists ? "  -  has its own settings"
+                                                             : "  -  uses the global settings");
+        const float text_x = pos.x + 24.0f * uiScale;
+        const float text_y = pos.y + (card_height - line * 2.0f - 6.0f * uiScale) * 0.5f;
+        draw_list->AddText({text_x, text_y}, text_color, title.c_str());
+        draw_list->AddText({text_x, text_y + line + 6.0f * uiScale}, dim_color, subtitle.c_str());
+
+        const float center_y = pos.y + card_height * 0.5f;
+        float right = max.x - 18.0f * uiScale - reset_width;
+        if (selected) {
+            right = pill("Editing", right, center_y, accent,
+                         ImGui::GetColorU32(BigPictureMode::Theme::OnAccent)) -
+                    8.0f * uiScale;
+        }
+        if (gameConfigExists) {
+            pill("Custom", right, center_y, IM_COL32(58, 58, 68, 255), text_color);
+        }
+
+        if (gameConfigExists) {
+            // Goes back to the global settings for this game.
+            ImGui::SameLine();
+            ImGui::SetCursorScreenPos(
+                {max.x - reset_width, center_y - ImGui::GetFrameHeight() * 0.5f});
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.93f, 0.45f, 0.45f, 1.0f));
+            if (ImGui::Button("Remove")) {
+                deleteProfileIndex = i;
             }
+            ImGui::PopStyleColor(2);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Remove this game's own settings and use Global again");
+            }
+        }
+        ImGui::SetCursorScreenPos({pos.x - margin, max.y + 10.0f * uiScale});
+        ImGui::Dummy(ImVec2(0.0f, 0.0f));
+        ImGui::PopID();
 
-            ImGui::TableNextColumn();
-            std::string profileLabel =
-                i == 0 ? "Global" : profileIcons[i].serial + " - " + profileIcons[i].title;
-            if (ImGui::Button(profileLabel.c_str(),
-                              ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
-
-                currentProfile = profileLabel;
-                if (currentProfile == "Global") {
-                    LoadSettings("Global");
-                } else {
-                    LoadSettings(profileIcons[i].serial);
-                    if (!gameConfigExists) {
-                        SaveSettings(profileIcons[i].serial);
-                    }
+        if (clicked) {
+            currentProfile = profileLabel;
+            if (is_global) {
+                LoadSettings("Global");
+            } else {
+                LoadSettings(profileIcons[i].serial);
+                if (!gameConfigExists) {
+                    SaveSettings(profileIcons[i].serial);
                 }
             }
         }
-
-        ImGui::EndTable();
     }
 
     if (deleteProfileIndex != -1) {
@@ -542,7 +626,8 @@ void SettingsWindow::DrawProfileSelector() {
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal("Confirm Delete", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         const std::string title = profileIcons[deleteProfileIndex].title;
-        const std::string message = "Delete game-specific config file for " + title + "?";
+        const std::string message =
+            "Remove the settings of " + title + "?\nThe game will use the global settings again.";
         const std::filesystem::path path =
             Common::FS::GetUserPath(Common::FS::PathType::CustomConfigs) /
             (profileIcons[deleteProfileIndex].serial + ".json");
@@ -702,6 +787,11 @@ void SettingsWindow::DrawSettingsTable(SettingsCategory category) {
                 AddSettingSliderFloat("RCAS Attenuation", rcasAttenuationSetting, 0.0f, 3.0f, 3);
             }
 
+            AddSettingCheckbox("Frame Generation (FSR 3)", frameGenerationSetting);
+            AddSettingCheckbox("FXAA", fxaaSetting);
+            AddSettingCheckbox("Direct Readbacks", directReadbacksSetting);
+            AddSettingCheckbox("Render Target Sync", renderTargetSyncSetting);
+
             ImGui::EndTable();
         }
     } else if (category == SettingsCategory::Input) {
@@ -786,15 +876,19 @@ void SettingsWindow::AddSettingCheckbox(std::string name, bool& value) {
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
 
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.0f * uiScale);
+    ImGui::AlignTextToFramePadding();
     ImGui::TextWrapped("%s", name.c_str());
     ImGui::TableNextColumn();
-    ImGui::Checkbox(label.c_str(), &value);
+    BigPictureMode::Theme::Toggle(label.c_str(), &value, uiScale);
 }
 
 void SettingsWindow::AddSettingSliderInt(std::string name, int& value, int min, int max) {
     std::string label = "##" + name;
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.0f * uiScale);
+    ImGui::AlignTextToFramePadding();
     ImGui::TextWrapped("%s", name.c_str());
 
     ImGui::TableNextColumn();
@@ -808,6 +902,8 @@ void SettingsWindow::AddSettingSliderFloat(std::string name, float& value, int m
 
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.0f * uiScale);
+    ImGui::AlignTextToFramePadding();
     ImGui::TextWrapped("%s", name.c_str());
 
     ImGui::TableNextColumn();
@@ -819,6 +915,8 @@ void SettingsWindow::AddSettingCombo(std::string name, int& value,
     std::string label = "##" + name;
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.0f * uiScale);
+    ImGui::AlignTextToFramePadding();
     ImGui::TextWrapped("%s", name.c_str());
 
     ImGui::TableNextColumn();

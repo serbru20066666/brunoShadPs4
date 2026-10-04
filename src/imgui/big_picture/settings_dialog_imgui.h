@@ -20,6 +20,12 @@ class SettingsWindow {
 public:
     SettingsWindow(bool gameRunning);
     void Prepare();
+    /// Opens the dialog on the list of game folders.
+    void OpenFolders() {
+        currentCategory = SettingsCategory::Folders;
+    }
+    /// Opens the dialog on the graphics settings of one game.
+    void OpenProfile(const std::string& serial, const std::string& title);
     void DrawSettings(bool* open, const std::function<void()>& applySettings);
 
 private:
@@ -37,6 +43,9 @@ private:
     void SaveSettings(std::string profile);
     void LoadSettings(std::string profile);
     void SaveInstallDirs();
+    /// Fills the dialog with the settings known to work well for the selected game.
+    void ApplySuggested();
+    bool HasSuggested() const;
 
     void SetupWindow();
     void DeInit();
@@ -134,6 +143,10 @@ private:
     int windowHeightSetting;
     bool hdrAllowedSetting;
     bool fsrEnabledSetting;
+    bool frameGenerationSetting;
+    bool fxaaSetting;
+    bool directReadbacksSetting;
+    bool renderTargetSyncSetting;
     bool rcasEnabledSetting;
     float rcasAttenuationSetting;
 

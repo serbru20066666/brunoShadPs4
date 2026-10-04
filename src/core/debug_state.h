@@ -165,6 +165,9 @@ class DebugStateImpl {
 public:
     float Framerate = 1.0f / 60.0f;
     float FrameDeltaTime;
+    /// Frames shown per second counting the generated ones, or zero while frame generation
+    /// is not adding any. Framerate keeps counting only the frames the game rendered.
+    float DisplayedFramerate = 0.0f;
 
     std::pair<u32, u32> game_resolution{};
     std::pair<u32, u32> output_resolution{};
