@@ -516,7 +516,7 @@ void Launch(char* executableName, bool sameProcess) {
 
     float sliderScale = 1.0f;
     auto applySettings = [&] {
-        uiScale = EmulatorSettings.GetBigPictureScale() / 1000.f;
+        uiScale = std::clamp(EmulatorSettings.GetBigPictureScale() / 1000.f, 0.75f, 1.5f);
         sliderScale = uiScale;
         GetGameIconInfo(gameIcons);
         // The launcher always stays in a window; the full screen setting is for the games.
@@ -633,7 +633,7 @@ void Launch(char* executableName, bool sameProcess) {
         if (ImGui::IsWindowAppearing()) {
             sliderScale = uiScale;
         }
-        ImGui::SliderFloat("##scale", &sliderScale, 0.5f, 2.5f, "");
+        ImGui::SliderFloat("##scale", &sliderScale, 0.75f, 1.5f, "");
         // Only apply the size once the slider is released, so it does not move under the mouse.
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             uiScale = sliderScale;
