@@ -29,6 +29,8 @@ const std::unordered_map<std::string_view, std::string_view> Spanish = {
     {"Output: ", "Salida: "},
     {"Resolution: ", "Resolución: "},
     {"Enlarged with FSR", "Ampliada con FSR"},
+    {"Enlarged to {} with FSR", "Ampliada a {} con FSR"},
+    {"Enlarged to {} without FSR", "Ampliada a {} sin FSR"},
     {"Enlarged without FSR", "Ampliada sin FSR"},
     {"original of the game", "la del juego"},
     {"patched", "con parche"},
