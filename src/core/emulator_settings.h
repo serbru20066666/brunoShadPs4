@@ -414,6 +414,7 @@ struct GPUSettings {
     Setting<int> rcas_attenuation{250};
     Setting<bool> fxaa_enabled{false};
     Setting<bool> frame_generation{false};
+    Setting<bool> enhance_game_quality{false};
     Setting<bool> render_target_sync{false};
     Setting<bool> direct_readbacks{false};
     Setting<bool> userfaultfd{false};
@@ -434,6 +435,7 @@ struct GPUSettings {
             make_override<GPUSettings>("rcas_attenuation", &GPUSettings::rcas_attenuation),
             make_override<GPUSettings>("fxaa_enabled", &GPUSettings::fxaa_enabled),
             make_override<GPUSettings>("frame_generation", &GPUSettings::frame_generation),
+            make_override<GPUSettings>("enhance_game_quality", &GPUSettings::enhance_game_quality),
             make_override<GPUSettings>("render_target_sync", &GPUSettings::render_target_sync),
             make_override<GPUSettings>("direct_readbacks", &GPUSettings::direct_readbacks),
             make_override<GPUSettings>("dump_shaders", &GPUSettings::dump_shaders),
@@ -455,8 +457,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(GPUSettings, window_width, window_height, int
                                    direct_memory_access_enabled, dump_shaders, patch_shaders,
                                    vblank_frequency, full_screen, full_screen_mode, present_mode,
                                    hdr_allowed, fsr_enabled, rcas_enabled, rcas_attenuation,
-                                   fxaa_enabled, frame_generation, render_target_sync,
-                                   direct_readbacks, userfaultfd, inline_fetch_shader)
+                                   fxaa_enabled, frame_generation, enhance_game_quality,
+                                   render_target_sync, direct_readbacks, userfaultfd,
+                                   inline_fetch_shader)
 
 // -------------------------------
 // Vulkan settings
@@ -721,6 +724,7 @@ public:
     SETTING_FORWARD(m_gpu, RcasAttenuation, rcas_attenuation)
     SETTING_FORWARD_BOOL(m_gpu, FxaaEnabled, fxaa_enabled)
     SETTING_FORWARD_BOOL(m_gpu, FrameGenerationEnabled, frame_generation)
+    SETTING_FORWARD_BOOL(m_gpu, EnhanceGameQualityEnabled, enhance_game_quality)
     SETTING_FORWARD_BOOL(m_gpu, RenderTargetSyncEnabled, render_target_sync)
     SETTING_FORWARD_BOOL(m_gpu, DirectReadbacksEnabled, direct_readbacks)
     SETTING_FORWARD(m_gpu, ReadbacksMode, readbacks_mode)

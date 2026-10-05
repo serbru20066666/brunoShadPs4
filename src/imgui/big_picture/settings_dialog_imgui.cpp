@@ -3,9 +3,15 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <map>
+#include <mutex>
+#include <optional>
 #include <ranges>
 #include <ImGuiFileDialog.h>
+#include <SDL3/SDL_dialog.h>
+#include <SDL3/SDL_error.h>
+#include <SDL3/SDL_keyboard.h>
 #include <cmrc/cmrc.hpp>
 #include <stb_image.h>
 
@@ -60,6 +66,7 @@ void SettingsWindow::LoadSettings(std::string profile) {
     hdrAllowedSetting = EmulatorSettings.IsHdrAllowed();
     fsrEnabledSetting = EmulatorSettings.IsFsrEnabled();
     frameGenerationSetting = EmulatorSettings.IsFrameGenerationEnabled();
+    enhanceGameQualitySetting = EmulatorSettings.IsEnhanceGameQualityEnabled();
     fxaaSetting = EmulatorSettings.IsFxaaEnabled();
     directReadbacksSetting = EmulatorSettings.IsDirectReadbacksEnabled();
     renderTargetSyncSetting = EmulatorSettings.IsRenderTargetSyncEnabled();
@@ -120,6 +127,7 @@ void SettingsWindow::SaveSettings(std::string profile) {
     EmulatorSettings.SetHdrAllowed(hdrAllowedSetting, isSpecific);
     EmulatorSettings.SetFsrEnabled(fsrEnabledSetting, isSpecific);
     EmulatorSettings.SetFrameGenerationEnabled(frameGenerationSetting, isSpecific);
+    EmulatorSettings.SetEnhanceGameQualityEnabled(enhanceGameQualitySetting, isSpecific);
     EmulatorSettings.SetFxaaEnabled(fxaaSetting, isSpecific);
     EmulatorSettings.SetDirectReadbacksEnabled(directReadbacksSetting, isSpecific);
     EmulatorSettings.SetRenderTargetSyncEnabled(renderTargetSyncSetting, isSpecific);
@@ -243,13 +251,44 @@ struct Suggested {
     std::string_view serial;
     int readbacks_mode;
     bool direct_readbacks;
+    bool readback_linear_images;
+    bool red_zone_patches;
     bool fxaa;
     bool frame_generation;
 };
 constexpr std::array SuggestedSettings{
-    Suggested{"CUSA01623", 0, false, true, true}, // God of War III Remastered
-    Suggested{"CUSA00004", 2, true, false, true}, // inFamous Second Son
+    Suggested{"CUSA01623", 0, false, true, false, true, true}, // God of War III Remastered
+    Suggested{"CUSA00004", 2, true, false, true, false, true}, // inFamous Second Son
 };
+
+// The folder picked in the system's dialog. Its callback can run on another thread.
+std::mutex picked_folder_mutex;
+std::optional<std::string> picked_folder;
+// Set when the system could not show its picker (no desktop portal or helper on some Linux
+// setups, for instance): the built-in one takes over from then on.
+std::atomic_bool system_picker_failed{false};
+// Asks the folders page to open the built-in picker.
+std::atomic_bool open_builtin_picker{false};
+
+void SDLCALL OnFolderPicked(void*, const char* const* paths, int) {
+    if (paths == nullptr) {
+        // An error, as opposed to the user cancelling, which gives an empty list.
+        LOG_WARNING(ImGui, "The system's folder picker is not available: {}", SDL_GetError());
+        system_picker_failed = true;
+        open_builtin_picker = true;
+        return;
+    }
+    if (paths[0]) {
+        std::scoped_lock lock{picked_folder_mutex};
+        picked_folder = paths[0];
+    }
+}
+
+bool IsGameFolder(const std::filesystem::path& path) {
+    std::error_code ec;
+    return std::filesystem::exists(path / "eboot.bin", ec) ||
+           std::filesystem::exists(path / "sce_sys" / "param.sfo", ec);
+}
 
 const Suggested* FindSuggested(const std::string& profile) {
     const auto it = std::ranges::find_if(SuggestedSettings, [&](const Suggested& suggested) {
@@ -275,9 +314,78 @@ void SettingsWindow::ApplySuggested() {
     rcasEnabledSetting = true;
     readbacksModeSetting = suggested->readbacks_mode;
     directReadbacksSetting = suggested->direct_readbacks;
+    readbackLinearImagesSetting = suggested->readback_linear_images;
+    windowsGuestRedZoneProtectionModeSetting = suggested->red_zone_patches;
     fxaaSetting = suggested->fxaa;
     frameGenerationSetting = suggested->frame_generation;
     currentCategory = SettingsCategory::Graphics;
+}
+
+bool SettingsWindow::HasSuggestedFor(const std::string& serial) {
+    return FindSuggested(serial) != nullptr;
+}
+
+bool SettingsWindow::HasOwnSettings(const std::string& serial) {
+    std::error_code ec;
+    return std::filesystem::exists(
+        Common::FS::GetUserPath(Common::FS::PathType::CustomConfigs) / (serial + ".json"), ec);
+}
+
+void SettingsWindow::ApplySuggestedTo(const std::string& serial, const std::string& title) {
+    currentProfile = serial + " - " + title;
+    LoadSettings(serial);
+    ApplySuggested();
+    SaveSettings(serial);
+    // Leave the dialog as it was: on the global settings.
+    currentProfile = "Global";
+    LoadSettings("Global");
+    currentCategory = SettingsCategory::Profiles;
+}
+
+void SettingsWindow::RequestGamesFolder() {
+    if (system_picker_failed) {
+        open_builtin_picker = true;
+        return;
+    }
+    SDL_ShowOpenFolderDialog(&OnFolderPicked, nullptr, SDL_GetKeyboardFocus(), nullptr, false);
+}
+
+bool SettingsWindow::BuiltinPickerPending() {
+    return open_builtin_picker;
+}
+
+bool SettingsWindow::ConsumeGamesFolder() {
+    std::optional<std::string> picked;
+    {
+        std::scoped_lock lock{picked_folder_mutex};
+        picked.swap(picked_folder);
+    }
+    if (!picked) {
+        return false;
+    }
+    std::filesystem::path path{std::u8string(picked->begin(), picked->end())};
+    // Picking a game instead of the folder that holds the games is an easy mistake: take the
+    // folder above it.
+    if (IsGameFolder(path) && path.has_parent_path()) {
+        path = path.parent_path();
+    }
+    path = std::filesystem::path{path.generic_u8string()};
+    for (auto& dir : m_GameInstallDirs) {
+        if (dir.path == path) {
+            const bool changed = !dir.enabled;
+            dir.enabled = true;
+            if (changed) {
+                SaveInstallDirs();
+            }
+            return changed;
+        }
+    }
+    GameInstallDir dir;
+    dir.path = path;
+    dir.enabled = true;
+    m_GameInstallDirs.push_back(dir);
+    SaveInstallDirs();
+    return true;
 }
 
 void SettingsWindow::OpenProfile(const std::string& serial, const std::string& title) {
@@ -661,7 +769,7 @@ void SettingsWindow::DrawProfileSelector() {
 }
 
 void SettingsWindow::DrawGameFolderManager() {
-    ImGuiChildFlags child_flags = ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened;
+    ImGuiChildFlags child_flags = ImGuiChildFlags_NavFlattened;
 
     ImGuiWindowFlags window_flags =
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
@@ -669,79 +777,103 @@ void SettingsWindow::DrawGameFolderManager() {
     ImGui::BeginChild("ContentRegion", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()), child_flags,
                       window_flags);
 
-    if (ImGui::Button("Add Folder", ImVec2(400.f * uiScale, 0))) {
-        ImGuiFileDialog::Instance()->OpenDialog("OpenFolder", "Add shadPS4 game folder", nullptr,
-                                                ".", 1, nullptr,
+    const float margin = 16.0f * uiScale;
+    ImGui::Dummy(ImVec2(0.0f, 4.0f * uiScale));
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + margin);
+    ImGui::TextUnformatted("Where are your games?");
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + margin);
+    ImGui::TextDisabled("Add the folder that holds your games, with one folder per game inside.");
+    ImGui::Dummy(ImVec2(0.0f, 4.0f * uiScale));
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + margin);
+    if (BigPictureMode::Theme::AccentButton("Add a folder...")) {
+        if (isGameRunning) {
+            open_builtin_picker = true;
+        } else {
+            RequestGamesFolder();
+        }
+    }
+    ConsumeGamesFolder();
+
+    if (open_builtin_picker.exchange(false)) {
+        ImGuiFileDialog::Instance()->OpenDialog("OpenFolder", "Add a folder of games", nullptr, ".",
+                                                1, nullptr,
                                                 ImGuiFileDialogFlags_DisableCreateDirectoryButton |
                                                     ImGuiFileDialogFlags_DontShowHiddenFiles);
-
-        ImGuiViewport* viewport = ImGui::GetMainViewport();
+    }
+    {
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(viewport->Pos);
         ImGui::SetNextWindowSize(viewport->Size);
     }
-
-    if (ImGuiFileDialog::Instance()->Display("OpenFolder", child_flags | ImGuiWindowFlags_NoMove)) {
+    if (ImGuiFileDialog::Instance()->Display("OpenFolder", ImGuiWindowFlags_NoMove)) {
         if (ImGuiFileDialog::Instance()->IsOk()) {
-            GameInstallDir dir;
-            dir.path = ImGuiFileDialog::Instance()->GetCurrentPath();
-            dir.enabled = true;
-
-#ifdef WIN32
-            // replace \ with / on windows
-            std::string pathString = dir.path.string();
-            size_t pos = 0;
-            while ((pos = pathString.find("\\", pos)) != std::string::npos) {
-                pathString.replace(pos, 1, "/");
-                pos += 2;
-            }
-
-            dir.path = pathString;
-#endif
-
-            m_GameInstallDirs.push_back(dir);
-            SaveInstallDirs();
+            std::scoped_lock lock{picked_folder_mutex};
+            picked_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
         }
-
         ImGuiFileDialog::Instance()->Close();
     }
+    ImGui::Dummy(ImVec2(0.0f, 6.0f * uiScale));
 
-    ImGui::BeginChild("Game Folder List", ImVec2(0, 0), true, child_flags);
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    const float line = ImGui::GetTextLineHeight();
+    const float card_height = ImGui::GetFrameHeight() + 28.0f * uiScale;
+    int remove = -1;
+    for (int i = 0; i < m_GameInstallDirs.size(); i++) {
+        ImGui::PushID(i);
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + margin);
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        const float width = ImGui::GetContentRegionAvail().x - margin;
+        const ImVec2 max{pos.x + width, pos.y + card_height};
+        draw_list->AddRectFilled(pos, max, ImGui::GetColorU32(BigPictureMode::Theme::Chip),
+                                 22.0f * uiScale);
 
-    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(0, 5.0f * uiScale));
-    if (ImGui::BeginTable("FoldersTable", 3)) {
-        ImGui::TableSetupColumn("FolderButton", ImGuiTableColumnFlags_WidthFixed, 300.0f * uiScale);
-        ImGui::TableSetupColumn("FolderEnabled", ImGuiTableColumnFlags_WidthFixed, 0.0f);
-        ImGui::TableSetupColumn("FolderPath");
+        // On the right: whether the folder is used, and removing it from the list.
+        const float remove_width =
+            ImGui::CalcTextSize("Remove").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+        const float toggle_width = line * 1.15f * 1.85f;
+        const float controls = remove_width + toggle_width + 36.0f * uiScale;
 
-        for (int i = 0; i < m_GameInstallDirs.size(); i++) {
-            std::string buttonLabel = "Remove Folder##" + std::to_string(i);
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            if (ImGui::Button(buttonLabel.c_str(), ImVec2(280 * uiScale, 0))) {
-                m_GameInstallDirs.erase(m_GameInstallDirs.begin() + i);
-                SaveInstallDirs();
-            }
+        const std::string path = Common::FS::PathToUTF8String(m_GameInstallDirs[i].path);
+        ImGui::PushClipRect({pos.x, pos.y}, {max.x - controls, max.y}, true);
+        draw_list->AddText({pos.x + 24.0f * uiScale, pos.y + (card_height - line) * 0.5f},
+                           ImGui::GetColorU32(m_GameInstallDirs[i].enabled
+                                                  ? ImGui::GetStyle().Colors[ImGuiCol_Text]
+                                                  : BigPictureMode::Theme::TextDim),
+                           path.c_str());
+        ImGui::PopClipRect();
 
-            ImGui::TableNextColumn();
-            std::string checkboxLabel = "##EnableFolder" + std::to_string(i);
-            bool previousState = m_GameInstallDirs[i].enabled;
-            ImGui::Checkbox(checkboxLabel.c_str(), &m_GameInstallDirs[i].enabled);
-            ImGui::SameLine();
-            ImGui::Dummy(ImVec2(5.0 * uiScale, 0));
-
-            if (m_GameInstallDirs[i].enabled != previousState) {
-                SaveInstallDirs();
-            }
-
-            ImGui::TableNextColumn();
-            ImGui::TextWrapped("%s", m_GameInstallDirs[i].path.string().c_str());
+        const float controls_y = pos.y + (card_height - ImGui::GetFrameHeight()) * 0.5f;
+        ImGui::SetCursorScreenPos({max.x - controls + 8.0f * uiScale, controls_y});
+        if (BigPictureMode::Theme::Toggle("##use", &m_GameInstallDirs[i].enabled, uiScale)) {
+            SaveInstallDirs();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Show the games of this folder");
+        }
+        ImGui::SetCursorScreenPos({max.x - remove_width - 14.0f * uiScale, controls_y});
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.93f, 0.45f, 0.45f, 1.0f));
+        if (ImGui::Button("Remove")) {
+            remove = i;
+        }
+        ImGui::PopStyleColor(2);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Take this folder off the list. Nothing is deleted from disk.");
         }
 
-        ImGui::EndTable();
+        ImGui::SetCursorScreenPos({pos.x - margin, max.y + 10.0f * uiScale});
+        ImGui::Dummy(ImVec2(0.0f, 0.0f));
+        ImGui::PopID();
+    }
+    if (remove >= 0) {
+        m_GameInstallDirs.erase(m_GameInstallDirs.begin() + remove);
+        SaveInstallDirs();
+    }
+    if (m_GameInstallDirs.empty()) {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + margin);
+        ImGui::TextDisabled("No folders yet.");
     }
 
-    ImGui::PopStyleVar();
-    ImGui::EndChild();
     ImGui::EndChild();
 }
 
@@ -788,6 +920,7 @@ void SettingsWindow::DrawSettingsTable(SettingsCategory category) {
             }
 
             AddSettingCheckbox("Frame Generation (FSR 3)", frameGenerationSetting);
+            AddSettingCheckbox("Enhance Game Quality", enhanceGameQualitySetting);
             AddSettingCheckbox("FXAA", fxaaSetting);
             AddSettingCheckbox("Direct Readbacks", directReadbacksSetting);
             AddSettingCheckbox("Render Target Sync", renderTargetSyncSetting);

@@ -1,6 +1,8 @@
 //  SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 //  SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
+
 #include "video_core/renderer_vulkan/host_passes/pp_pass.h"
 
 #include "common/assert.h"
@@ -251,6 +253,16 @@ void PostProcessingPass::Render(vk::CommandBuffer cmdbuf, vk::ImageView input,
                          });
 
     cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, *pipeline_layout, 0, set_writes);
+    // BRUNO_ENHANCE_COMPARE=1 shows the same part of the frame without and with the effect.
+    static const bool compare = [] {
+        const char* env = std::getenv("BRUNO_ENHANCE_COMPARE");
+        return env && env[0] == '1';
+    }();
+    settings.enhance = compare                                          ? -1.0f
+                       : EmulatorSettings.IsEnhanceGameQualityEnabled() ? 1.0f
+                                                                        : 0.0f;
+    settings.texel_x = 1.0f / static_cast<float>(input_size.width);
+    settings.texel_y = 1.0f / static_cast<float>(input_size.height);
     cmdbuf.pushConstants(*pipeline_layout, vk::ShaderStageFlagBits::eFragment, 0, sizeof(Settings),
                          &settings);
 

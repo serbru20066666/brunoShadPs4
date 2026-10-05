@@ -74,7 +74,7 @@ std::filesystem::path UpdateChecker(const std::string sceItem, std::filesystem::
 
 /// Draws the game grid: one card per game with its cover, its name and its two actions. Sets
 /// `settingsFor` to the game whose settings button was pressed.
-void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor) {
+void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor, int& suggestFor) {
     const float maxAvailableWidth = ImGui::GetContentRegionAvail().x;
     const float pad = 18.0f * uiScale;
     const float gap = 22.0f * uiScale;
@@ -106,6 +106,8 @@ void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor) {
 
         // The cover starts the game.
         ImGui::SetCursorScreenPos(cover_min);
+        // The recommended settings button sits on top of the cover and has to get its clicks.
+        ImGui::SetNextItemAllowOverlap();
         bool play = ImGui::InvisibleButton("cover", ImVec2(cover, cover));
         const bool cover_hovered = ImGui::IsItemHovered() || ImGui::IsItemFocused();
         if (ImGui::IsItemFocused() && !gameIcons[i].focusState) {
@@ -124,6 +126,24 @@ void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor) {
         } else {
             draw_list->AddRectFilled(cover_min, cover_max, ImGui::GetColorU32(Theme::Chip),
                                      16.0f * uiScale);
+        }
+
+        // A game with known good settings that has none of its own yet offers them right here.
+        using ImGuiEmuSettings::SettingsWindow;
+        if (SettingsWindow::HasSuggestedFor(gameIcons[i].serial) &&
+            !SettingsWindow::HasOwnSettings(gameIcons[i].serial)) {
+            ImGui::SetCursorScreenPos({cover_min.x + 8.0f * uiScale, cover_min.y + 8.0f * uiScale});
+            ImGui::SetWindowFontScale(uiScale * 0.72f);
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                ImVec2(10.0f * uiScale, 5.0f * uiScale));
+            if (Theme::AccentButton("Use recommended settings##suggest")) {
+                suggestFor = i;
+            }
+            ImGui::PopStyleVar();
+            ImGui::SetWindowFontScale(uiScale);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Settings tested with this game. You can change them later.");
+            }
         }
 
         // Two lines for the name, cut off if it is longer.
@@ -382,9 +402,7 @@ void Launch(char* executableName, bool sameProcess) {
             ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - width);
         }
         if (ImGui::Button("Add games")) {
-            settingsWindow.Prepare();
-            settingsWindow.OpenFolders();
-            showSettings = true;
+            ImGuiEmuSettings::SettingsWindow::RequestGamesFolder();
         }
         ImGui::SameLine();
         if (ImGui::Button("Settings")) {
@@ -405,7 +423,23 @@ void Launch(char* executableName, bool sameProcess) {
         }
 
         int settingsFor = -1;
-        SetGameIcons(gameIcons, settingsFor);
+        int suggestFor = -1;
+        SetGameIcons(gameIcons, settingsFor, suggestFor);
+        if (suggestFor >= 0) {
+            settingsWindow.ApplySuggestedTo(gameIcons[suggestFor].serial,
+                                            gameIcons[suggestFor].title);
+        }
+        // A folder picked in the system's dialog arrives here.
+        if (settingsWindow.ConsumeGamesFolder()) {
+            GetGameIconInfo(gameIcons);
+        }
+        // Without a system picker, adding a folder goes through the folders page and its
+        // built-in one.
+        if (ImGuiEmuSettings::SettingsWindow::BuiltinPickerPending() && !showSettings) {
+            settingsWindow.Prepare();
+            settingsWindow.OpenFolders();
+            showSettings = true;
+        }
         if (settingsFor >= 0) {
             settingsWindow.Prepare();
             settingsWindow.OpenProfile(gameIcons[settingsFor].serial, gameIcons[settingsFor].title);
@@ -420,9 +454,7 @@ void Launch(char* executableName, bool sameProcess) {
                 ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0f;
             ImGui::SetCursorPosX((ImGui::GetWindowWidth() - width) * 0.5f);
             if (Theme::AccentButton(label)) {
-                settingsWindow.Prepare();
-                settingsWindow.OpenFolders();
-                showSettings = true;
+                ImGuiEmuSettings::SettingsWindow::RequestGamesFolder();
             }
         }
         ImGui::EndChild();

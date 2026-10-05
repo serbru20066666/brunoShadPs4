@@ -18,6 +18,11 @@ public:
         float gamma = 1.0f;
         u32 hdr = 0;
         u32 srgb_input = 0;
+        /// Strength of "Enhance Game Quality", zero when it is off.
+        float enhance = 0.0f;
+        /// Size of a texel of the input, for the shader's neighbourhood taps.
+        float texel_x = 0.0f;
+        float texel_y = 0.0f;
     };
 
     void Create(vk::Device device, vk::Format surface_format);

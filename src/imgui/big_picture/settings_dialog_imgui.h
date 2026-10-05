@@ -26,6 +26,22 @@ public:
     }
     /// Opens the dialog on the graphics settings of one game.
     void OpenProfile(const std::string& serial, const std::string& title);
+
+    /// Opens the system's own folder picker to add a folder of games.
+    static void RequestGamesFolder();
+    /// Whether the built-in picker is waiting to be shown, because the system's is not
+    /// available. The launcher opens the folders page for it.
+    static bool BuiltinPickerPending();
+    /// Adds the folder picked with RequestGamesFolder, if one arrived. Returns true when the
+    /// list of folders changed.
+    bool ConsumeGamesFolder();
+
+    /// Whether there are settings known to work well for this game.
+    static bool HasSuggestedFor(const std::string& serial);
+    /// Whether the game already has settings of its own.
+    static bool HasOwnSettings(const std::string& serial);
+    /// Gives the game its own settings, set to the suggested ones, and saves them.
+    void ApplySuggestedTo(const std::string& serial, const std::string& title);
     void DrawSettings(bool* open, const std::function<void()>& applySettings);
 
 private:
@@ -144,6 +160,7 @@ private:
     bool hdrAllowedSetting;
     bool fsrEnabledSetting;
     bool frameGenerationSetting;
+    bool enhanceGameQualitySetting;
     bool fxaaSetting;
     bool directReadbacksSetting;
     bool renderTargetSyncSetting;
