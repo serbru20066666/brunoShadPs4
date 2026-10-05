@@ -419,12 +419,17 @@ void SettingsWindow::OpenProfile(const std::string& serial, const std::string& t
 }
 
 void SettingsWindow::Prepare() {
-    uiScale = EmulatorSettings.GetBigPictureScale() / 1000.f;
+    // The size chosen on the home screen is for the game cards. The settings follow the size
+    // of the window instead, so that they always fit in it.
+    const float height = ImGui::GetIO().DisplaySize.y;
+    uiScale = height > 0.0f ? std::clamp(height / 800.0f, 0.75f, 2.5f) : 1.0f;
 }
 
 void SettingsWindow::DeInit() {
+    // Loading the settings again drops what was not saved, but not the size of the home screen.
+    const int home_scale = EmulatorSettings.GetBigPictureScale();
     EmulatorSettings.Load();
-    EmulatorSettings.SetBigPictureScale(static_cast<int>(uiScale * 1000));
+    EmulatorSettings.SetBigPictureScale(home_scale);
     EmulatorSettings.Save();
 
     if (isGameRunning && !runningGameSerial.empty()) {
@@ -432,6 +437,7 @@ void SettingsWindow::DeInit() {
     }
 }
 void SettingsWindow::DrawSettings(bool* open, const std::function<void()>& applySettings) {
+    Prepare();
     BigPictureMode::Theme::Push(uiScale);
 
     SetupWindow();

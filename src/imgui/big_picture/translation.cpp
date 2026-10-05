@@ -26,6 +26,10 @@ const std::unordered_map<std::string_view, std::string_view> Spanish = {
      "Ajustes probados con este juego. Puedes cambiarlos después."},
     {"Size", "Tamaño"},
     {"Full screen", "Pantalla completa"},
+    {"Output: ", "Salida: "},
+    {"no FSR", "sin FSR"},
+    {"Frame generation: on", "Generación de cuadros: sí"},
+    {"Frame generation: off", "Generación de cuadros: no"},
     {"Not played yet", "Sin jugar aún"},
     {"Played: ", "Jugado: "},
     {"Last played: ", "Última vez: "},
@@ -64,6 +68,7 @@ const std::unordered_map<std::string_view, std::string_view> Spanish = {
      "Correcciones y mejoras de rendimiento para God of War III e inFamous Second Son"},
     {"This launcher, set in Poppins (OFL)", "Este lanzador, con la fuente Poppins (OFL)"},
     {"Close", "Cerrar"},
+    {"Contact", "Contacto"},
     {"Version", "Versión"},
 
     // Settings window

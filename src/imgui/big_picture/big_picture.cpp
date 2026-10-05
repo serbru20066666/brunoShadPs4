@@ -151,6 +151,10 @@ void FillGameDetails(std::vector<IconInfo>& icons) {
         display_height = static_cast<int>(mode->h * mode->pixel_density);
     }
 
+    // A window is kept inside the usable area of the display, as the emulator does.
+    SDL_Rect usable{};
+    SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &usable);
+
     for (auto& icon : icons) {
         const auto game = ReadJson(GetUserPath(PathType::CustomConfigs) / (icon.serial + ".json"));
         try {
@@ -164,17 +168,33 @@ void FillGameDetails(std::vector<IconInfo>& icons) {
             const int height = full_screen
                                    ? display_height
                                    : StoredSetting(game, global, "GPU", "window_height", 720);
-            icon.details[0] = fmt::format("{} x {}", width, height);
-            icon.details[1] = Tr(full_screen ? "Full screen" : "Windowed");
-            icon.details[2] =
+            int out_width = width;
+            int out_height = height;
+            if (!full_screen && usable.w > 0 && usable.h > 0 && width > 0 && height > 0) {
+                const float fit =
+                    std::min({1.0f, usable.w * 0.9f / width, usable.h * 0.9f / height});
+                out_width = static_cast<int>(width * fit);
+                out_height = static_cast<int>(height * fit);
+            }
+            // The game renders at a resolution of its own; this is the size of the picture
+            // shown, and how the picture of the game is brought to that size.
+            icon.details[0] = fmt::format("{}{} x {}", Tr("Output: "), out_width, out_height);
+            icon.details[1] = fmt::format(
+                "{}  \u00b7  {}", Tr(full_screen ? "Full screen" : "Windowed"),
+                Tr(StoredSetting(game, global, "GPU", "fsr_enabled", false) ? "FSR" : "no FSR"));
+            icon.details[2] = Tr(StoredSetting(game, global, "GPU", "frame_generation", false)
+                                     ? "Frame generation: on"
+                                     : "Frame generation: off");
+            icon.details[3] =
                 ConsoleLanguageName(StoredSetting(game, global, "General", "console_language", 1));
         } catch (const nlohmann::json::exception&) {
             icon.details[0].clear();
             icon.details[1].clear();
             icon.details[2].clear();
+            icon.details[3].clear();
         }
-        icon.details[3] = Tr("Not played yet");
-        icon.details[4].clear();
+        icon.details[4] = Tr("Not played yet");
+        icon.details[5].clear();
     }
 
     // One line per game: its serial, the time played as h:mm:ss and when it was last played.
@@ -195,12 +215,12 @@ void FillGameDetails(std::vector<IconInfo>& icons) {
         if (icon == icons.end() || std::sscanf(played.c_str(), "%d:%d", &hours, &minutes) != 2) {
             continue;
         }
-        icon->details[3] = hours > 0 ? fmt::format("{}{} h {} min", Tr("Played: "), hours, minutes)
+        icon->details[4] = hours > 0 ? fmt::format("{}{} h {} min", Tr("Played: "), hours, minutes)
                                      : fmt::format("{}{} min", Tr("Played: "), minutes);
         if (const std::tm* when = std::localtime(&last)) {
             char date[32]{};
             std::strftime(date, sizeof(date), Tr("%Y-%m-%d"), when);
-            icon->details[4] = fmt::format("{}{}", Tr("Last played: "), date);
+            icon->details[5] = fmt::format("{}{}", Tr("Last played: "), date);
         }
     }
 }
@@ -214,10 +234,10 @@ void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor, int& sugge
     const float cover = gameImageSize * uiScale;
     const float line = ImGui::GetTextLineHeight();
     const float frame = ImGui::GetFrameHeight();
-    // Five smaller lines under the name say how the game is set up and how much it was played.
+    // Six smaller lines under the name say how the game is set up and how much it was played.
     constexpr float details_scale = 0.74f;
     const float details_line = line * details_scale + 2.0f * uiScale;
-    const float details_height = details_line * 5.0f + 16.0f * uiScale;
+    const float details_height = details_line * 6.0f + 16.0f * uiScale;
     const ImVec2 card{cover + pad * 2.0f, pad + cover + 12.0f * uiScale + line * 2.0f +
                                               details_height + 12.0f * uiScale + frame + pad};
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
@@ -294,10 +314,10 @@ void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor, int& sugge
 
         const float details_top = title_min.y + line * 2.0f + 8.0f * uiScale;
         ImGui::PushClipRect({cover_min.x, details_top},
-                            {cover_max.x, details_top + details_line * 5.0f}, true);
+                            {cover_max.x, details_top + details_line * 6.0f}, true);
         ImGui::SetWindowFontScale(uiScale * details_scale);
         ImGui::PushStyleColor(ImGuiCol_Text, Theme::TextDim);
-        for (int row = 0; row < 5; ++row) {
+        for (int row = 0; row < 6; ++row) {
             ImGui::SetCursorScreenPos({cover_min.x, details_top + details_line * row});
             ImGui::TextUnformatted(gameIcons[i].details[row].c_str());
         }
@@ -663,6 +683,11 @@ void Launch(char* executableName, bool sameProcess) {
                 Tr("Fixes and speed-ups for God of War III and inFamous Second Son"));
             ImGui::TextDisabled(Tr("This launcher, set in Poppins (OFL)"));
             ImGui::TextDisabled(Tr("github.com/serbru20066666/brunoShadPs4"));
+            ImGui::Dummy(ImVec2(0.0f, 6.0f * uiScale));
+            ImGui::TextUnformatted(Tr("Contact"));
+            ImGui::TextDisabled("Bruno Cardenas");
+            ImGui::TextDisabled("brunocardenasproyectos@gmail.com");
+            ImGui::TextDisabled("+51 987 970 898");
             ImGui::Dummy(ImVec2(0.0f, 8.0f * uiScale));
             if (Theme::AccentButton(Tr("Close")) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                 ImGui::CloseCurrentPopup();
