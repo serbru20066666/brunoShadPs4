@@ -372,6 +372,10 @@ jobs:
     - name: Download all artifacts
       uses: actions/download-artifact@v8
       with:
+        # With a pattern every artifact gets a folder of its own, also when there is only one:
+        # without it a single artifact is unpacked straight into the path, and no zip is made.
+        pattern: shadps4-*
+        merge-multiple: false
         path: ./artifacts
 
     - name: Compress individual directories (without parent directory)

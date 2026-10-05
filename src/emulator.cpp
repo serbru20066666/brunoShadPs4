@@ -849,8 +849,7 @@ void Emulator::Restart(std::filesystem::path eboot_path,
     pid_t pid;
     const int err = posix_spawnp(&pid, executableName, nullptr, nullptr, argv.data(), environ);
     if (err != 0) {
-        std::cerr << "Failed to restart game: posix_spawnp failed: " << strerror(err)
-                  << std::endl;
+        std::cerr << "Failed to restart game: posix_spawnp failed: " << strerror(err) << std::endl;
         std::quick_exit(1);
     }
 #else
