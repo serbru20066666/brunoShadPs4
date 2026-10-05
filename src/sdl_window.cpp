@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_hints.h>
 #include <SDL3/SDL_init.h>
@@ -112,6 +113,19 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, Input::GameControllers* controller
     }
 #endif
     SDL_InitSubSystem(SDL_INIT_AUDIO);
+
+    // A window as large as the display covers all of it, title bar included, and cannot be told
+    // apart from full screen. Keep the window inside the usable area, at the same proportions.
+    if (SDL_Rect usable; SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &usable) &&
+                         usable.w > 0 && usable.h > 0 && width > 0 && height > 0) {
+        const float max_width = usable.w * 0.9f;
+        const float max_height = usable.h * 0.9f;
+        const float fit = std::min(max_width / width, max_height / height);
+        if (fit < 1.0f) {
+            width = static_cast<s32>(width * fit);
+            height = static_cast<s32>(height * fit);
+        }
+    }
 
     SDL_PropertiesID props = SDL_CreateProperties();
     SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING,

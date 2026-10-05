@@ -76,6 +76,7 @@ private:
                      SettingsCategory category);
 
     void AddSettingCheckbox(std::string name, bool& value);
+    void AddSettingNote(std::string text);
     void AddSettingSliderInt(std::string name, int& value, int min, int max);
     void AddSettingSliderFloat(std::string name, float& value, int min, int max, int precision);
     void AddSettingCombo(std::string name, int& value, std::vector<std::string> options);
@@ -159,6 +160,12 @@ private:
     int presentModeSetting;
     int windowWidthSetting;
     int windowHeightSetting;
+    /// The sizes offered for the window, and the one chosen.
+    const std::vector<std::pair<int, int>> windowSizes = {
+        {1280, 720}, {1600, 900}, {1920, 1080}, {2560, 1440}, {3840, 2160}};
+    const std::vector<std::string> windowSizeOptions = {"1280 x 720", "1600 x 900", "1920 x 1080",
+                                                        "2560 x 1440", "3840 x 2160"};
+    int windowSizeSetting{};
     bool hdrAllowedSetting;
     bool fsrEnabledSetting;
     bool frameGenerationSetting;

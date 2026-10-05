@@ -109,8 +109,11 @@ const std::unordered_map<std::string_view, std::string_view> Spanish = {
     {"Mailbox", "Mailbox (sin cortes, baja latencia)"},
     {"Fifo", "Fifo (sincronización vertical)"},
     {"Immediate", "Inmediato (sin sincronización)"},
-    {"Window Width", "Ancho de la ventana"},
-    {"Window Height", "Alto de la ventana"},
+    {"Window Size", "Tamaño de la ventana"},
+    {"The game decides the resolution it renders at. The picture is then scaled to fill the "
+     "window or the screen.",
+     "La resolución a la que se renderiza la decide el juego. Después la imagen se escala para "
+     "llenar la ventana o la pantalla."},
     {"Enable HDR", "Activar HDR"},
     {"Enable FSR", "Activar FSR"},
     {"Enable RCAS", "Activar RCAS"},

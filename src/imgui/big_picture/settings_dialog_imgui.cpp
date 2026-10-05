@@ -67,6 +67,13 @@ void SettingsWindow::LoadSettings(std::string profile) {
     presentModeSetting = GetComboIndex(EmulatorSettings.GetPresentMode(), presentModeOptions);
     windowHeightSetting = EmulatorSettings.GetWindowHeight();
     windowWidthSetting = EmulatorSettings.GetWindowWidth();
+    // The closest of the sizes offered.
+    windowSizeSetting = 0;
+    for (int i = 0; i < static_cast<int>(windowSizes.size()); ++i) {
+        if (windowSizes[i].second <= windowHeightSetting) {
+            windowSizeSetting = i;
+        }
+    }
     hdrAllowedSetting = EmulatorSettings.IsHdrAllowed();
     fsrEnabledSetting = EmulatorSettings.IsFsrEnabled();
     frameGenerationSetting = EmulatorSettings.IsFrameGenerationEnabled();
@@ -131,6 +138,11 @@ void SettingsWindow::SaveSettings(std::string profile) {
     EmulatorSettings.SetFullScreen(isFullscreen, isSpecific);
     EmulatorSettings.SetFullScreenMode(fullscreenModeOptions.at(fullscreenModeSetting), isSpecific);
     EmulatorSettings.SetPresentMode(presentModeOptions.at(presentModeSetting), isSpecific);
+    if (fullscreenModeSetting == 0) {
+        // The size only means something for a window; otherwise what was stored is kept.
+        windowWidthSetting = windowSizes.at(windowSizeSetting).first;
+        windowHeightSetting = windowSizes.at(windowSizeSetting).second;
+    }
     EmulatorSettings.SetWindowHeight(windowHeightSetting, isSpecific);
     EmulatorSettings.SetWindowWidth(windowWidthSetting, isSpecific);
     EmulatorSettings.SetHdrAllowed(hdrAllowedSetting, isSpecific);
@@ -924,8 +936,11 @@ void SettingsWindow::DrawSettingsTable(SettingsCategory category) {
 
             AddSettingCombo("Display Mode", fullscreenModeSetting, fullscreenModeOptions);
             AddSettingCombo("Present Mode", presentModeSetting, presentModeOptions);
-            AddSettingSliderInt("Window Width", windowWidthSetting, 0, 8000);
-            AddSettingSliderInt("Window Height", windowHeightSetting, 0, 7000);
+            if (fullscreenModeSetting == 0) {
+                AddSettingCombo("Window Size", windowSizeSetting, windowSizeOptions);
+            }
+            AddSettingNote("The game decides the resolution it renders at. The picture is then "
+                           "scaled to fill the window or the screen.");
             AddSettingCheckbox("Enable HDR", hdrAllowedSetting);
             AddSettingCheckbox("Enable FSR", fsrEnabledSetting);
 
@@ -1032,6 +1047,17 @@ void SettingsWindow::AddSettingCheckbox(std::string name, bool& value) {
     ImGui::TextWrapped("%s", Tr(name));
     ImGui::TableNextColumn();
     BigPictureMode::Theme::Toggle(label.c_str(), &value, uiScale);
+}
+
+void SettingsWindow::AddSettingNote(std::string text) {
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::TableNextColumn();
+    ImGui::PushStyleColor(ImGuiCol_Text, BigPictureMode::Theme::TextDim);
+    ImGui::SetWindowFontScale(uiScale * 0.85f);
+    ImGui::TextWrapped("%s", Tr(text));
+    ImGui::SetWindowFontScale(uiScale);
+    ImGui::PopStyleColor();
 }
 
 void SettingsWindow::AddSettingSliderInt(std::string name, int& value, int min, int max) {
