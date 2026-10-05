@@ -52,6 +52,11 @@ bool IsExecuteError(void* ctx) {
     return ((EXCEPTION_POINTERS*)ctx)->ExceptionRecord->ExceptionInformation[0] == 0xf;
 #elif defined(__APPLE__) && defined(ARCH_X86_64)
     return ((ucontext_t*)ctx)->uc_mcontext->__es.__err & 0x10;
+#elif defined(__APPLE__) && defined(ARCH_ARM64)
+    // ESR_EL1 bits [31:26] carry the Exception Class. 0x20/0x21 mean an Instruction Abort
+    // (execute fault), as opposed to the Data Abort classes the WnR bit above distinguishes.
+    const auto ec = ((ucontext_t*)ctx)->uc_mcontext->__es.__esr >> 26;
+    return ec == 0x20 || ec == 0x21;
 #elif defined(__FreeBSD__) && defined(ARCH_X86_64)
     return ((ucontext_t*)ctx)->uc_mcontext.mc_err & 0x10;
 #elif defined(ARCH_X86_64)

@@ -12,6 +12,12 @@
 #include <fmt/xchar.h>
 #include <hwinfo/hwinfo.h>
 
+#if defined(__APPLE__)
+#include <cstring>
+#include <spawn.h>
+extern char** environ;
+#endif
+
 #include "common/debug.h"
 #include "common/logging/log.h"
 #include "common/string_util.h"
@@ -774,6 +780,10 @@ void Emulator::Restart(std::filesystem::path eboot_path,
 }
 
 [[noreturn]] void Emulator::Relaunch(std::vector<std::string> args) {
+    RelaunchProcess(executableName, std::move(args));
+}
+
+[[noreturn]] void RelaunchProcess(const char* executableName, std::vector<std::string> args) {
     const auto guest_args = std::find(args.begin(), args.end(), "--");
     args.insert(guest_args, {"--wait-for-pid", std::to_string(Debugger::GetCurrentPid())});
 
@@ -830,6 +840,20 @@ void Emulator::Restart(std::filesystem::path eboot_path,
     }
     argv.push_back(nullptr);
 
+#if defined(__APPLE__)
+    // fork() is unsafe here: by this point SDL/Metal/CoreAudio/GameController have run on this
+    // process, and forking a process with such frameworks loaded can deadlock in the parent's
+    // post-fork pthread_atfork handlers (the child reaches execvp fine, but the parent never
+    // reaches quick_exit below, so WaitForPid() in the new process waits on it forever).
+    // posix_spawn avoids duplicating the parent's address space/threads and sidesteps this.
+    pid_t pid;
+    const int err = posix_spawnp(&pid, executableName, nullptr, nullptr, argv.data(), environ);
+    if (err != 0) {
+        std::cerr << "Failed to restart game: posix_spawnp failed: " << strerror(err)
+                  << std::endl;
+        std::quick_exit(1);
+    }
+#else
     pid_t pid = fork();
     if (pid == 0) {
         // Child process - execute the new instance
@@ -840,6 +864,7 @@ void Emulator::Restart(std::filesystem::path eboot_path,
         std::cerr << "Failed to restart game: fork failed" << std::endl;
         std::quick_exit(1);
     }
+#endif
 #endif
 
     std::quick_exit(0);

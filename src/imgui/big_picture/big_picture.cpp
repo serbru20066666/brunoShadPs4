@@ -543,9 +543,9 @@ void Launch(char* executableName, bool sameProcess) {
     EmulatorSettings.Save();
 
     if (runEbootPath != "") {
-        auto* emulator = Common::Singleton<Core::Emulator>::Instance();
-        emulator->executableName = executableName;
         if (sameProcess) {
+            auto* emulator = Common::Singleton<Core::Emulator>::Instance();
+            emulator->executableName = executableName;
             emulator->Run(runEbootPath);
         } else {
             std::vector<std::string> args{"--log-append", "--game",
@@ -556,7 +556,12 @@ void Launch(char* executableName, bool sameProcess) {
             if (!runSerial.empty() && std::filesystem::exists(patch)) {
                 args.insert(args.end(), {"--patch", Common::FS::PathToUTF8String(patch)});
             }
-            emulator->Relaunch(std::move(args));
+            // Spawning the new process directly, without constructing an Emulator here, avoids
+            // registering its Shutdown() as an at_quick_exit handler: that handler assumes a
+            // previous Run() and can hold up this process's exit for no reason, which on macOS
+            // left this window appearing frozen while the next process compiled its first
+            // shaders and crowded this one off the CPU.
+            Core::RelaunchProcess(executableName, std::move(args));
         }
     }
 }

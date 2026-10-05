@@ -21,6 +21,17 @@ struct SysModules {
     HLEInitDef callback;
 };
 
+/**
+ * Launches a new emulator process with the supplied CLI arguments, then terminates the calling
+ * process. The new process waits for this one to exit before initializing.
+ *
+ * This is a free function (rather than a method) so that callers who only want to hand off to a
+ * freshly spawned instance - such as the game launcher - don't need to construct a full Emulator
+ * first: doing so would register its Shutdown() as an at_quick_exit handler, which assumes a
+ * previous Run() and can needlessly slow down process exit for a launcher that never ran one.
+ */
+[[noreturn]] void RelaunchProcess(const char* executableName, std::vector<std::string> args);
+
 class Emulator {
 public:
     Emulator();
@@ -39,10 +50,7 @@ public:
      */
     void Restart(std::filesystem::path eboot_path, const std::vector<std::string>& guest_args = {});
 
-    /**
-     * Launches a new emulator process with the supplied CLI arguments, then terminates this
-     * process. The new process waits for this one to exit before initializing.
-     */
+    /// Calls RelaunchProcess() with this instance's executableName.
     [[noreturn]] void Relaunch(std::vector<std::string> args);
 
     const char* executableName;
