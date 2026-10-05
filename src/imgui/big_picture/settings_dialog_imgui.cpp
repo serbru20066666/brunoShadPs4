@@ -13,7 +13,9 @@
 #include <SDL3/SDL_dialog.h>
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_keyboard.h>
+#include <SDL3/SDL_misc.h>
 #include <cmrc/cmrc.hpp>
+#include <pugixml.hpp>
 #include <stb_image.h>
 
 #include "common/elf_info.h"
@@ -78,7 +80,10 @@ void SettingsWindow::LoadSettings(std::string profile) {
     hdrAllowedSetting = EmulatorSettings.IsHdrAllowed();
     fsrEnabledSetting = EmulatorSettings.IsFsrEnabled();
     frameGenerationSetting = EmulatorSettings.IsFrameGenerationEnabled();
-    gamePatchName = isSpecific ? GamePatchName(profile.substr(0, 9)) : std::string{};
+    gamePatchSerial = isSpecific ? profile.substr(0, 9) : std::string{};
+    gamePatchName.clear();
+    gamePatchMessage.clear();
+    LoadGamePatches();
     gamePatchSetting = EmulatorSettings.IsUseGamePatch() ? 1 : 0;
     enhanceGameQualitySetting = EmulatorSettings.IsEnhanceGameQualityEnabled();
     fxaaSetting = EmulatorSettings.IsFxaaEnabled();
@@ -151,7 +156,7 @@ void SettingsWindow::SaveSettings(std::string profile) {
     EmulatorSettings.SetHdrAllowed(hdrAllowedSetting, isSpecific);
     EmulatorSettings.SetFsrEnabled(fsrEnabledSetting, isSpecific);
     EmulatorSettings.SetFrameGenerationEnabled(frameGenerationSetting, isSpecific);
-    if (isSpecific && !gamePatchName.empty()) {
+    if (isSpecific && gamePatchFileExists) {
         EmulatorSettings.SetUseGamePatch(gamePatchSetting != 0, true);
     }
     EmulatorSettings.SetEnhanceGameQualityEnabled(enhanceGameQualitySetting, isSpecific);
@@ -516,6 +521,7 @@ void SettingsWindow::DrawCategoryTabs() {
     AddCategory("Log", logTexture, SettingsCategory::Log);
 
     if (currentProfile != "Global") {
+        AddCategory("Patches", experimentalTexture, SettingsCategory::Patches);
         AddCategory("Experimental", experimentalTexture, SettingsCategory::Experimental);
     }
 
@@ -560,6 +566,8 @@ void SettingsWindow::DrawMainContent(bool* open, const std::function<void()>& ap
         DrawProfileSelector();
     } else if (currentCategory == SettingsCategory::Folders) {
         DrawGameFolderManager();
+    } else if (currentCategory == SettingsCategory::Patches) {
+        DrawPatchManager();
     } else {
         DrawSettingsTable(currentCategory);
     }
@@ -1065,22 +1073,237 @@ void SettingsWindow::AddSettingCheckbox(std::string name, bool& value) {
     BigPictureMode::Theme::Toggle(label.c_str(), &value, uiScale);
 }
 
+namespace {
+
+std::filesystem::path GamePatchPath(const std::string& serial) {
+    return Common::FS::GetUserPath(Common::FS::PathType::PatchesDir) / (serial + ".xml");
+}
+
+std::mutex picked_patch_mutex;
+std::optional<std::string> picked_patch;
+
+void SDLCALL OnPatchPicked(void*, const char* const* paths, int) {
+    if (paths && paths[0]) {
+        std::scoped_lock lock{picked_patch_mutex};
+        picked_patch = paths[0];
+    }
+}
+
+} // Anonymous namespace
+
 std::string SettingsWindow::GamePatchName(const std::string& serial) {
-    const auto path = Common::FS::GetUserPath(Common::FS::PathType::PatchesDir) / (serial + ".xml");
-    std::ifstream file{path};
-    if (serial.empty() || !file) {
+    pugi::xml_document doc;
+    if (serial.empty() || !doc.load_file(GamePatchPath(serial).c_str())) {
         return {};
     }
-    // The name is all that is needed, so the file is not parsed as a whole.
-    const std::string text{std::istreambuf_iterator<char>{file}, {}};
-    const auto metadata = text.find("<Metadata");
-    const auto name = text.find("Name=\"", metadata == std::string::npos ? 0 : metadata);
-    if (name == std::string::npos) {
-        return "Patch";
+    // The first patch that is switched on is the one that says what the game will do.
+    for (const auto& metadata : doc.child("Patch").children("Metadata")) {
+        if (std::string_view{metadata.attribute("isEnabled").value()} == "true") {
+            return metadata.attribute("Name").value();
+        }
     }
-    const auto start = name + 6;
-    const auto end = text.find('"', start);
-    return end == std::string::npos ? "Patch" : text.substr(start, end - start);
+    return {};
+}
+
+void SettingsWindow::LoadGamePatches() {
+    gamePatches.clear();
+    gamePatchFileExists = false;
+    if (gamePatchSerial.empty()) {
+        return;
+    }
+    std::error_code ec;
+    gamePatchFileExists = std::filesystem::exists(GamePatchPath(gamePatchSerial), ec);
+    pugi::xml_document doc;
+    if (!gamePatchFileExists || !doc.load_file(GamePatchPath(gamePatchSerial).c_str())) {
+        return;
+    }
+    for (const auto& metadata : doc.child("Patch").children("Metadata")) {
+        gamePatches.push_back({
+            .name = metadata.attribute("Name").value(),
+            .author = metadata.attribute("Author").value(),
+            .patch_version = metadata.attribute("PatchVer").value(),
+            .app_version = metadata.attribute("AppVer").value(),
+            .enabled = std::string_view{metadata.attribute("isEnabled").value()} == "true",
+        });
+    }
+    gamePatchName = GamePatchName(gamePatchSerial);
+}
+
+void SettingsWindow::SetGamePatchEnabled(size_t index, bool enabled) {
+    const auto path = GamePatchPath(gamePatchSerial);
+    pugi::xml_document doc;
+    // The comments of the file say where a patch comes from: they are kept.
+    if (!doc.load_file(path.c_str(),
+                       pugi::parse_default | pugi::parse_comments | pugi::parse_declaration)) {
+        return;
+    }
+    size_t current = 0;
+    for (auto metadata : doc.child("Patch").children("Metadata")) {
+        if (current++ != index) {
+            continue;
+        }
+        auto attribute = metadata.attribute("isEnabled");
+        if (!attribute) {
+            attribute = metadata.append_attribute("isEnabled");
+        }
+        attribute.set_value(enabled ? "true" : "false");
+        doc.save_file(path.c_str(), "    ");
+        break;
+    }
+    LoadGamePatches();
+}
+
+void SettingsWindow::InstallPatchFile(const std::filesystem::path& picked) {
+    pugi::xml_document doc;
+    if (!doc.load_file(picked.c_str()) || !doc.child("Patch").child("Metadata")) {
+        gamePatchMessage = Tr("That file is not a patch file.");
+        return;
+    }
+    bool for_this_game = false;
+    for (const auto& id : doc.child("Patch").child("TitleID").children("ID")) {
+        for_this_game |= gamePatchSerial == id.text().get();
+    }
+    if (!for_this_game) {
+        gamePatchMessage = Tr("That patch file is for another game.");
+        return;
+    }
+    const auto path = GamePatchPath(gamePatchSerial);
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    if (std::filesystem::exists(path, ec) && !std::filesystem::equivalent(path, picked, ec)) {
+        // The file being replaced is kept next to the new one.
+        auto previous = path;
+        previous += ".previous";
+        std::filesystem::copy_file(path, previous,
+                                   std::filesystem::copy_options::overwrite_existing, ec);
+    }
+    std::filesystem::copy_file(picked, path, std::filesystem::copy_options::overwrite_existing, ec);
+    gamePatchMessage = ec ? Tr("The patch file could not be copied.") : Tr("Patch file added.");
+    LoadGamePatches();
+}
+
+void SettingsWindow::DrawPatchManager() {
+    ImGui::BeginChild("ContentRegion", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()),
+                      ImGuiChildFlags_NavFlattened,
+                      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                          ImGuiWindowFlags_NoCollapse);
+
+    {
+        std::optional<std::string> picked;
+        {
+            std::scoped_lock lock{picked_patch_mutex};
+            picked.swap(picked_patch);
+        }
+        if (picked) {
+            InstallPatchFile(std::filesystem::path{std::u8string{picked->begin(), picked->end()}});
+        }
+    }
+
+    const float margin = 16.0f * uiScale;
+    const auto dim_line = [&](const std::string& text) {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + margin);
+        ImGui::PushStyleColor(ImGuiCol_Text, BigPictureMode::Theme::TextDim);
+        ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x - margin);
+        ImGui::TextWrapped("%s", text.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+    };
+
+    ImGui::Dummy(ImVec2(0.0f, 4.0f * uiScale));
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + margin);
+    ImGui::TextUnformatted(Tr("Patches of this game"));
+    dim_line(Tr("A patch changes how the game runs: its resolution, its frame rate and the like. "
+                "The patches switched on here are applied when the game starts from this "
+                "launcher."));
+    dim_line(Tr("File: ") + Common::FS::PathToUTF8String(GamePatchPath(gamePatchSerial)));
+    ImGui::Dummy(ImVec2(0.0f, 4.0f * uiScale));
+
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + margin);
+    if (BigPictureMode::Theme::AccentButton(
+            Tr(gamePatchFileExists ? "Replace the patch file..." : "Add a patch file..."))) {
+        static const SDL_DialogFileFilter filters[] = {{"Patch files (*.xml)", "xml"}};
+        SDL_ShowOpenFileDialog(&OnPatchPicked, nullptr, SDL_GetKeyboardFocus(), filters, 1, nullptr,
+                               false);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(Tr("Open the patches folder"))) {
+        const auto folder = GamePatchPath(gamePatchSerial).parent_path();
+        std::error_code ec;
+        std::filesystem::create_directories(folder, ec);
+        SDL_OpenURL(("file:///" + Common::FS::PathToUTF8String(folder)).c_str());
+    }
+    if (!gamePatchMessage.empty()) {
+        dim_line(gamePatchMessage);
+    }
+    ImGui::Dummy(ImVec2(0.0f, 6.0f * uiScale));
+
+    if (!gamePatchFileExists) {
+        dim_line(Tr("This game has no patch file yet."));
+        ImGui::EndChild();
+        return;
+    }
+
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    const float line = ImGui::GetTextLineHeight();
+    const float toggle_width = line * 1.15f * 1.85f;
+    const float card_height = line * 2.0f + 6.0f * uiScale + 30.0f * uiScale;
+    const auto card = [&](const std::string& title, const std::string& subtitle, const char* id,
+                          bool* value) {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + margin);
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        const float width = ImGui::GetContentRegionAvail().x - margin;
+        const ImVec2 max{pos.x + width, pos.y + card_height};
+        draw_list->AddRectFilled(pos, max, ImGui::GetColorU32(BigPictureMode::Theme::Chip),
+                                 22.0f * uiScale);
+        const float text_y = pos.y + (card_height - line * 2.0f - 6.0f * uiScale) * 0.5f;
+        ImGui::PushClipRect(pos, {max.x - toggle_width - 40.0f * uiScale, max.y}, true);
+        draw_list->AddText({pos.x + 24.0f * uiScale, text_y},
+                           ImGui::GetColorU32(ImGui::GetStyle().Colors[ImGuiCol_Text]),
+                           title.c_str());
+        draw_list->AddText({pos.x + 24.0f * uiScale, text_y + line + 6.0f * uiScale},
+                           ImGui::GetColorU32(BigPictureMode::Theme::TextDim), subtitle.c_str());
+        ImGui::PopClipRect();
+        ImGui::SetCursorScreenPos(
+            {max.x - toggle_width - 22.0f * uiScale, pos.y + (card_height - line * 1.15f) * 0.5f});
+        const bool changed = BigPictureMode::Theme::Toggle(id, value, uiScale);
+        ImGui::SetCursorScreenPos({pos.x - margin, max.y + 8.0f * uiScale});
+        ImGui::Dummy(ImVec2(0.0f, 0.0f));
+        return changed;
+    };
+
+    bool use_patches = gamePatchSetting != 0;
+    if (card(Tr("Apply the patches of this game"),
+             Tr("Off: the game starts as it is, whatever is switched on below. Kept with Save."),
+             "##use_patches", &use_patches)) {
+        gamePatchSetting = use_patches ? 1 : 0;
+    }
+    ImGui::Dummy(ImVec2(0.0f, 4.0f * uiScale));
+
+    for (size_t i = 0; i < gamePatches.size(); ++i) {
+        ImGui::PushID(static_cast<int>(i));
+        const auto& patch = gamePatches[i];
+        std::string subtitle;
+        const auto add = [&](const char* label, const std::string& value) {
+            if (!value.empty()) {
+                subtitle += (subtitle.empty() ? "" : "  \u00b7  ") + std::string{Tr(label)} + value;
+            }
+        };
+        add("by ", patch.author);
+        add("patch ", patch.patch_version);
+        add("for game version ", patch.app_version);
+        bool enabled = patch.enabled;
+        if (card(patch.name.empty() ? Tr("Patch") : patch.name, subtitle, "##enabled", &enabled)) {
+            SetGamePatchEnabled(i, enabled);
+            ImGui::PopID();
+            break;
+        }
+        ImGui::PopID();
+    }
+    if (gamePatches.empty()) {
+        dim_line(Tr("The patch file has no patches in it."));
+    }
+
+    ImGui::EndChild();
 }
 
 void SettingsWindow::AddSettingNote(std::string text) {

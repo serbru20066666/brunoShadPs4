@@ -186,16 +186,21 @@ void FillGameDetails(std::vector<IconInfo>& icons) {
             static const std::regex size{R"((\d{3,4})\s*[xX]\s*(\d{3,4}))"};
             if (std::smatch found; std::regex_search(patch, found, size)) {
                 icon.details[0] =
-                    fmt::format("{}{} x {}", Tr("Render: "), found[1].str(), found[2].str());
+                    fmt::format("{}{} x {}", Tr("Resolution: "), found[1].str(), found[2].str());
             } else {
-                icon.details[0] = fmt::format(
-                    "{}{}", Tr("Render: "), Tr(patch.empty() ? "original of the game" : "patched"));
+                icon.details[0] =
+                    fmt::format("{}{}", Tr("Resolution: "),
+                                Tr(patch.empty() ? "original of the game" : "patched"));
             }
-            // The size of the picture shown, and how that of the game is brought to that size.
-            icon.details[1] = fmt::format("{}{} x {}", Tr("Output: "), out_width, out_height);
-            icon.details[2] = fmt::format(
-                "{}  \u00b7  {}", Tr(full_screen ? "Full screen" : "Windowed"),
-                Tr(StoredSetting(game, global, "GPU", "fsr_enabled", false) ? "FSR" : "no FSR"));
+            // The resolution above is the detail the picture has. In full screen it is
+            // stretched over the display, whose size says nothing about the picture, so only
+            // a window is given a size.
+            icon.details[1] =
+                full_screen ? std::string{Tr("Full screen")}
+                            : fmt::format("{} {} x {}", Tr("Windowed"), out_width, out_height);
+            icon.details[2] = Tr(StoredSetting(game, global, "GPU", "fsr_enabled", false)
+                                     ? "Enlarged with FSR"
+                                     : "Enlarged without FSR");
             icon.details[3] = Tr(StoredSetting(game, global, "GPU", "frame_generation", false)
                                      ? "Frame generation: on"
                                      : "Frame generation: off");

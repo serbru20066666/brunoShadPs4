@@ -54,6 +54,7 @@ private:
         Folders,
         Log,
         Experimental,
+        Patches,
     };
 
     void SaveSettings(std::string profile);
@@ -71,6 +72,10 @@ private:
     void DrawSettingsTable(SettingsCategory);
     void DrawProfileSelector();
     void DrawGameFolderManager();
+    void DrawPatchManager();
+    void LoadGamePatches();
+    void SetGamePatchEnabled(size_t index, bool enabled);
+    void InstallPatchFile(const std::filesystem::path& picked);
     void DrawCategoryTabs();
     void AddCategory(std::string name, std::variant<SDL_Texture*, ImGui::RefCountedTexture> texture,
                      SettingsCategory category);
@@ -178,6 +183,19 @@ private:
     bool frameGenerationSetting;
     /// The patch file of the game being edited, if it has one, and whether to use it.
     std::string gamePatchName;
+    /// One patch of the patch file of the game being edited.
+    struct GamePatch {
+        std::string name;
+        std::string author;
+        std::string patch_version;
+        std::string app_version;
+        bool enabled{};
+    };
+    std::vector<GamePatch> gamePatches;
+    std::string gamePatchSerial;
+    bool gamePatchFileExists{};
+    /// What happened with the last file that was picked, shown under the buttons.
+    std::string gamePatchMessage;
     int gamePatchSetting{};
     bool enhanceGameQualitySetting;
     bool fxaaSetting;
