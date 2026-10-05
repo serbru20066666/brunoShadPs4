@@ -961,10 +961,11 @@ void SettingsWindow::DrawSettingsTable(SettingsCategory category) {
             }
             if (!gamePatchName.empty()) {
                 AddSettingCombo("Render Resolution", gamePatchSetting,
-                                {"Original of the game", gamePatchName});
+                                {"Original of the game (more fps)", gamePatchName});
             }
-            AddSettingNote("The game decides the resolution it renders at. The picture is then "
-                           "scaled to fill the window or the screen.");
+            AddSettingNote("The resolution the game renders at is what sets its speed: lower "
+                           "means more fps. The picture is then enlarged to fill the window or "
+                           "the screen, with FSR or without it, at next to no cost.");
             AddSettingCheckbox("Enable HDR", hdrAllowedSetting);
             AddSettingCheckbox("Enable FSR", fsrEnabledSetting);
 

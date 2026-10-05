@@ -35,7 +35,7 @@ const std::unordered_map<std::string_view, std::string_view> Spanish = {
     {"original of the game", "la del juego"},
     {"patched", "con parche"},
     {"Render Resolution", "Resolución de render"},
-    {"Original of the game", "Original del juego"},
+    {"Original of the game (more fps)", "Original del juego (más fps)"},
     {"no FSR", "sin FSR"},
     {"Frame generation: on", "Generación de cuadros: sí"},
     {"Frame generation: off", "Generación de cuadros: no"},
@@ -171,10 +171,12 @@ const std::unordered_map<std::string_view, std::string_view> Spanish = {
     {"Fifo", "Fifo (sincronización vertical)"},
     {"Immediate", "Inmediato (sin sincronización)"},
     {"Window Size", "Tamaño de la ventana"},
-    {"The game decides the resolution it renders at. The picture is then scaled to fill the "
-     "window or the screen.",
-     "La resolución a la que se renderiza la decide el juego. Después la imagen se escala para "
-     "llenar la ventana o la pantalla."},
+    {"The resolution the game renders at is what sets its speed: lower means more fps. The "
+     "picture is then enlarged to fill the window or the screen, with FSR or without it, at "
+     "next to no cost.",
+     "La resolución a la que el juego renderiza es la que marca su velocidad: más baja, más fps. "
+     "Después la imagen se amplía para llenar la ventana o la pantalla, con FSR o sin él, casi "
+     "sin costo."},
     {"Enable HDR", "Activar HDR"},
     {"Enable FSR", "Activar FSR"},
     {"Enable RCAS", "Activar RCAS"},

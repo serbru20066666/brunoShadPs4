@@ -188,9 +188,13 @@ void FillGameDetails(std::vector<IconInfo>& icons) {
                 icon.details[0] =
                     fmt::format("{}{} x {}", Tr("Resolution: "), found[1].str(), found[2].str());
             } else {
-                icon.details[0] =
-                    fmt::format("{}{}", Tr("Resolution: "),
-                                Tr(patch.empty() ? "original of the game" : "patched"));
+                // Without a patch a game gives the console the picture it was made for: 1080p
+                // on a PS4, and whatever it chooses on a PS4 Pro.
+                const bool pro = StoredSetting(game, global, "General", "neo_mode", false);
+                icon.details[0] = fmt::format("{}{}", Tr("Resolution: "),
+                                              !patch.empty() ? Tr("patched")
+                                              : pro          ? Tr("original of the game")
+                                                             : "1920 x 1080");
             }
             // The resolution above is the detail the picture has. In full screen it is
             // stretched over the display, whose size says nothing about the picture, so only
