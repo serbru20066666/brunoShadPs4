@@ -22,7 +22,7 @@ struct IconInfo {
     bool focusState;
     /// What the card says under the name: the size and the way the game will be shown, its
     /// language, and how much and when it was played.
-    std::array<std::string, 6> details;
+    std::array<std::string, 7> details;
 };
 
 void Launch(char* executableName, bool sameProcess);

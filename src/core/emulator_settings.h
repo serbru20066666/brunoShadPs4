@@ -242,8 +242,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(GeneralSettings, install_dirs, addon_install_
                                    trophy_popup_disabled, trophy_notification_duration, show_splash,
                                    trophy_notification_side, connected_to_network,
                                    discord_rpc_enabled, show_fps_counter, console_language,
-                                   big_picture_scale, gui_language, shadnet_server, shadnet_webapi_server,
-                                   signaling_info, enable_upnp, redzone_patches)
+                                   big_picture_scale, gui_language, shadnet_server,
+                                   shadnet_webapi_server, signaling_info, enable_upnp,
+                                   redzone_patches)
 
 // -------------------------------
 // Log settings
@@ -415,6 +416,9 @@ struct GPUSettings {
     Setting<int> rcas_attenuation{250};
     Setting<bool> fxaa_enabled{false};
     Setting<bool> frame_generation{false};
+    /// Whether the launcher applies the patch file named after the game, which is how a
+    /// game is made to render at another resolution.
+    Setting<bool> use_game_patch{true};
     Setting<bool> enhance_game_quality{false};
     Setting<bool> render_target_sync{false};
     Setting<bool> direct_readbacks{false};
@@ -436,6 +440,7 @@ struct GPUSettings {
             make_override<GPUSettings>("rcas_attenuation", &GPUSettings::rcas_attenuation),
             make_override<GPUSettings>("fxaa_enabled", &GPUSettings::fxaa_enabled),
             make_override<GPUSettings>("frame_generation", &GPUSettings::frame_generation),
+            make_override<GPUSettings>("use_game_patch", &GPUSettings::use_game_patch),
             make_override<GPUSettings>("enhance_game_quality", &GPUSettings::enhance_game_quality),
             make_override<GPUSettings>("render_target_sync", &GPUSettings::render_target_sync),
             make_override<GPUSettings>("direct_readbacks", &GPUSettings::direct_readbacks),
@@ -458,9 +463,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(GPUSettings, window_width, window_height, int
                                    direct_memory_access_enabled, dump_shaders, patch_shaders,
                                    vblank_frequency, full_screen, full_screen_mode, present_mode,
                                    hdr_allowed, fsr_enabled, rcas_enabled, rcas_attenuation,
-                                   fxaa_enabled, frame_generation, enhance_game_quality,
-                                   render_target_sync, direct_readbacks, userfaultfd,
-                                   inline_fetch_shader)
+                                   fxaa_enabled, frame_generation, use_game_patch,
+                                   enhance_game_quality, render_target_sync, direct_readbacks,
+                                   userfaultfd, inline_fetch_shader)
 
 // -------------------------------
 // Vulkan settings
@@ -726,6 +731,7 @@ public:
     SETTING_FORWARD(m_gpu, RcasAttenuation, rcas_attenuation)
     SETTING_FORWARD_BOOL(m_gpu, FxaaEnabled, fxaa_enabled)
     SETTING_FORWARD_BOOL(m_gpu, FrameGenerationEnabled, frame_generation)
+    SETTING_FORWARD_BOOL(m_gpu, UseGamePatch, use_game_patch)
     SETTING_FORWARD_BOOL(m_gpu, EnhanceGameQualityEnabled, enhance_game_quality)
     SETTING_FORWARD_BOOL(m_gpu, RenderTargetSyncEnabled, render_target_sync)
     SETTING_FORWARD_BOOL(m_gpu, DirectReadbacksEnabled, direct_readbacks)

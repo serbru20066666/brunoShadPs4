@@ -77,6 +77,13 @@ private:
 
     void AddSettingCheckbox(std::string name, bool& value);
     void AddSettingNote(std::string text);
+
+public:
+    /// The name of the patch in the file named after the game in the patches folder: what the
+    /// launcher applies when the game starts. Empty when the game has no such file.
+    static std::string GamePatchName(const std::string& serial);
+
+private:
     void AddSettingSliderInt(std::string name, int& value, int min, int max);
     void AddSettingSliderFloat(std::string name, float& value, int min, int max, int precision);
     void AddSettingCombo(std::string name, int& value, std::vector<std::string> options);
@@ -169,6 +176,9 @@ private:
     bool hdrAllowedSetting;
     bool fsrEnabledSetting;
     bool frameGenerationSetting;
+    /// The patch file of the game being edited, if it has one, and whether to use it.
+    std::string gamePatchName;
+    int gamePatchSetting{};
     bool enhanceGameQualitySetting;
     bool fxaaSetting;
     bool directReadbacksSetting;

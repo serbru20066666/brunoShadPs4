@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <fstream>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -77,6 +78,8 @@ void SettingsWindow::LoadSettings(std::string profile) {
     hdrAllowedSetting = EmulatorSettings.IsHdrAllowed();
     fsrEnabledSetting = EmulatorSettings.IsFsrEnabled();
     frameGenerationSetting = EmulatorSettings.IsFrameGenerationEnabled();
+    gamePatchName = isSpecific ? GamePatchName(profile.substr(0, 9)) : std::string{};
+    gamePatchSetting = EmulatorSettings.IsUseGamePatch() ? 1 : 0;
     enhanceGameQualitySetting = EmulatorSettings.IsEnhanceGameQualityEnabled();
     fxaaSetting = EmulatorSettings.IsFxaaEnabled();
     directReadbacksSetting = EmulatorSettings.IsDirectReadbacksEnabled();
@@ -148,6 +151,9 @@ void SettingsWindow::SaveSettings(std::string profile) {
     EmulatorSettings.SetHdrAllowed(hdrAllowedSetting, isSpecific);
     EmulatorSettings.SetFsrEnabled(fsrEnabledSetting, isSpecific);
     EmulatorSettings.SetFrameGenerationEnabled(frameGenerationSetting, isSpecific);
+    if (isSpecific && !gamePatchName.empty()) {
+        EmulatorSettings.SetUseGamePatch(gamePatchSetting != 0, true);
+    }
     EmulatorSettings.SetEnhanceGameQualityEnabled(enhanceGameQualitySetting, isSpecific);
     EmulatorSettings.SetFxaaEnabled(fxaaSetting, isSpecific);
     EmulatorSettings.SetDirectReadbacksEnabled(directReadbacksSetting, isSpecific);
@@ -945,6 +951,10 @@ void SettingsWindow::DrawSettingsTable(SettingsCategory category) {
             if (fullscreenModeSetting == 0) {
                 AddSettingCombo("Window Size", windowSizeSetting, windowSizeOptions);
             }
+            if (!gamePatchName.empty()) {
+                AddSettingCombo("Render Resolution", gamePatchSetting,
+                                {"Original of the game", gamePatchName});
+            }
             AddSettingNote("The game decides the resolution it renders at. The picture is then "
                            "scaled to fill the window or the screen.");
             AddSettingCheckbox("Enable HDR", hdrAllowedSetting);
@@ -1053,6 +1063,24 @@ void SettingsWindow::AddSettingCheckbox(std::string name, bool& value) {
     ImGui::TextWrapped("%s", Tr(name));
     ImGui::TableNextColumn();
     BigPictureMode::Theme::Toggle(label.c_str(), &value, uiScale);
+}
+
+std::string SettingsWindow::GamePatchName(const std::string& serial) {
+    const auto path = Common::FS::GetUserPath(Common::FS::PathType::PatchesDir) / (serial + ".xml");
+    std::ifstream file{path};
+    if (serial.empty() || !file) {
+        return {};
+    }
+    // The name is all that is needed, so the file is not parsed as a whole.
+    const std::string text{std::istreambuf_iterator<char>{file}, {}};
+    const auto metadata = text.find("<Metadata");
+    const auto name = text.find("Name=\"", metadata == std::string::npos ? 0 : metadata);
+    if (name == std::string::npos) {
+        return "Patch";
+    }
+    const auto start = name + 6;
+    const auto end = text.find('"', start);
+    return end == std::string::npos ? "Patch" : text.substr(start, end - start);
 }
 
 void SettingsWindow::AddSettingNote(std::string text) {

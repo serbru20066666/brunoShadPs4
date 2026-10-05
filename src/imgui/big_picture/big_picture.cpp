@@ -5,6 +5,7 @@
 #include <bit>
 #include <ctime>
 #include <fstream>
+#include <regex>
 #include <sstream>
 #include <nlohmann/json.hpp>
 #include <stb_image.h>
@@ -176,25 +177,39 @@ void FillGameDetails(std::vector<IconInfo>& icons) {
                 out_width = static_cast<int>(width * fit);
                 out_height = static_cast<int>(height * fit);
             }
-            // The game renders at a resolution of its own; this is the size of the picture
-            // shown, and how the picture of the game is brought to that size.
-            icon.details[0] = fmt::format("{}{} x {}", Tr("Output: "), out_width, out_height);
-            icon.details[1] = fmt::format(
+            // The game renders at a resolution of its own, which only a patch changes. A
+            // resolution patch says the resolution in its name.
+            using ImGuiEmuSettings::SettingsWindow;
+            const std::string patch = StoredSetting(game, global, "GPU", "use_game_patch", true)
+                                          ? SettingsWindow::GamePatchName(icon.serial)
+                                          : std::string{};
+            static const std::regex size{R"((\d{3,4})\s*[xX]\s*(\d{3,4}))"};
+            if (std::smatch found; std::regex_search(patch, found, size)) {
+                icon.details[0] =
+                    fmt::format("{}{} x {}", Tr("Render: "), found[1].str(), found[2].str());
+            } else {
+                icon.details[0] = fmt::format(
+                    "{}{}", Tr("Render: "), Tr(patch.empty() ? "original of the game" : "patched"));
+            }
+            // The size of the picture shown, and how that of the game is brought to that size.
+            icon.details[1] = fmt::format("{}{} x {}", Tr("Output: "), out_width, out_height);
+            icon.details[2] = fmt::format(
                 "{}  \u00b7  {}", Tr(full_screen ? "Full screen" : "Windowed"),
                 Tr(StoredSetting(game, global, "GPU", "fsr_enabled", false) ? "FSR" : "no FSR"));
-            icon.details[2] = Tr(StoredSetting(game, global, "GPU", "frame_generation", false)
+            icon.details[3] = Tr(StoredSetting(game, global, "GPU", "frame_generation", false)
                                      ? "Frame generation: on"
                                      : "Frame generation: off");
-            icon.details[3] =
+            icon.details[4] =
                 ConsoleLanguageName(StoredSetting(game, global, "General", "console_language", 1));
         } catch (const nlohmann::json::exception&) {
             icon.details[0].clear();
             icon.details[1].clear();
             icon.details[2].clear();
             icon.details[3].clear();
+            icon.details[4].clear();
         }
-        icon.details[4] = Tr("Not played yet");
-        icon.details[5].clear();
+        icon.details[5] = Tr("Not played yet");
+        icon.details[6].clear();
     }
 
     // One line per game: its serial, the time played as h:mm:ss and when it was last played.
@@ -215,12 +230,12 @@ void FillGameDetails(std::vector<IconInfo>& icons) {
         if (icon == icons.end() || std::sscanf(played.c_str(), "%d:%d", &hours, &minutes) != 2) {
             continue;
         }
-        icon->details[4] = hours > 0 ? fmt::format("{}{} h {} min", Tr("Played: "), hours, minutes)
+        icon->details[5] = hours > 0 ? fmt::format("{}{} h {} min", Tr("Played: "), hours, minutes)
                                      : fmt::format("{}{} min", Tr("Played: "), minutes);
         if (const std::tm* when = std::localtime(&last)) {
             char date[32]{};
             std::strftime(date, sizeof(date), Tr("%Y-%m-%d"), when);
-            icon->details[5] = fmt::format("{}{}", Tr("Last played: "), date);
+            icon->details[6] = fmt::format("{}{}", Tr("Last played: "), date);
         }
     }
 }
@@ -234,10 +249,10 @@ void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor, int& sugge
     const float cover = gameImageSize * uiScale;
     const float line = ImGui::GetTextLineHeight();
     const float frame = ImGui::GetFrameHeight();
-    // Six smaller lines under the name say how the game is set up and how much it was played.
+    // Seven smaller lines under the name say how the game is set up and how much it was played.
     constexpr float details_scale = 0.74f;
     const float details_line = line * details_scale + 2.0f * uiScale;
-    const float details_height = details_line * 6.0f + 16.0f * uiScale;
+    const float details_height = details_line * 7.0f + 16.0f * uiScale;
     const ImVec2 card{cover + pad * 2.0f, pad + cover + 12.0f * uiScale + line * 2.0f +
                                               details_height + 12.0f * uiScale + frame + pad};
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
@@ -314,10 +329,10 @@ void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor, int& sugge
 
         const float details_top = title_min.y + line * 2.0f + 8.0f * uiScale;
         ImGui::PushClipRect({cover_min.x, details_top},
-                            {cover_max.x, details_top + details_line * 6.0f}, true);
+                            {cover_max.x, details_top + details_line * 7.0f}, true);
         ImGui::SetWindowFontScale(uiScale * details_scale);
         ImGui::PushStyleColor(ImGuiCol_Text, Theme::TextDim);
-        for (int row = 0; row < 6; ++row) {
+        for (int row = 0; row < 7; ++row) {
             ImGui::SetCursorScreenPos({cover_min.x, details_top + details_line * row});
             ImGui::TextUnformatted(gameIcons[i].details[row].c_str());
         }
@@ -731,7 +746,15 @@ void Launch(char* executableName, bool sameProcess) {
             // A patch file named after the game in the patches folder is applied with it.
             const auto patch =
                 Common::FS::GetUserPath(Common::FS::PathType::PatchesDir) / (runSerial + ".xml");
-            if (!runSerial.empty() && std::filesystem::exists(patch)) {
+            // Unless the settings of the game say to leave it as it is.
+            const auto own = ReadJson(Common::FS::GetUserPath(Common::FS::PathType::CustomConfigs) /
+                                      (runSerial + ".json"));
+            bool use_patch = true;
+            try {
+                use_patch = StoredSetting(own, nlohmann::json{}, "GPU", "use_game_patch", true);
+            } catch (const nlohmann::json::exception&) {
+            }
+            if (!runSerial.empty() && use_patch && std::filesystem::exists(patch)) {
                 args.insert(args.end(), {"--patch", Common::FS::PathToUTF8String(patch)});
             }
             // Spawning the new process directly, without constructing an Emulator here, avoids
