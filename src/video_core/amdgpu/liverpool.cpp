@@ -93,6 +93,10 @@ void Liverpool::ProcessCommands() {
 
 void Liverpool::Process(std::stop_token stoken) {
     Common::SetCurrentThreadName("shadPS4:GpuCommandProcessor");
+    // This thread turns PM4 packets into GPU driver calls: on Apple Silicon's heterogeneous
+    // cores, leaving it at the default QoS gives the scheduler no reason to prefer a performance
+    // core for it over unrelated background work.
+    Common::SetCurrentThreadPriority(Common::ThreadPriority::VeryHigh);
     gpu_id = std::this_thread::get_id();
 #ifdef __linux__
     gpu_tid = gettid();

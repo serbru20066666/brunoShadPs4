@@ -82,7 +82,37 @@ void SetCurrentThreadRealtime(const std::chrono::nanoseconds period_ns) {
 
 #endif
 
-#ifdef _WIN32
+#if defined(__APPLE__)
+
+void SetCurrentThreadPriority(ThreadPriority new_priority) {
+    // macOS schedules by Quality of Service, not POSIX sched_priority: SCHED_OTHER threads are
+    // otherwise left at QOS_CLASS_DEFAULT regardless of sched_priority, which on Apple Silicon's
+    // heterogeneous cores means the scheduler has no signal to prefer performance cores for this
+    // thread over an unrelated background one.
+    qos_class_t qos;
+    switch (new_priority) {
+    case ThreadPriority::Low:
+        qos = QOS_CLASS_UTILITY;
+        break;
+    case ThreadPriority::Normal:
+        qos = QOS_CLASS_DEFAULT;
+        break;
+    case ThreadPriority::High:
+        qos = QOS_CLASS_USER_INITIATED;
+        break;
+    case ThreadPriority::VeryHigh:
+    case ThreadPriority::Critical:
+    default:
+        qos = QOS_CLASS_USER_INTERACTIVE;
+        break;
+    }
+    if (const int err = pthread_set_qos_class_self_np(qos, 0); err != 0) {
+        LOG_ERROR(Common, "Could not set thread QoS class to {}: {}", static_cast<int>(qos),
+                  NativeErrorToString(err));
+    }
+}
+
+#elif defined(_WIN32)
 
 void SetCurrentThreadPriority(ThreadPriority new_priority) {
     auto handle = GetCurrentThread();
@@ -110,6 +140,30 @@ void SetCurrentThreadPriority(ThreadPriority new_priority) {
     SetThreadPriority(handle, windows_priority);
 }
 
+#else
+
+void SetCurrentThreadPriority(ThreadPriority new_priority) {
+    pthread_t this_thread = pthread_self();
+
+    const auto scheduling_type = SCHED_OTHER;
+    s32 max_prio = sched_get_priority_max(scheduling_type);
+    s32 min_prio = sched_get_priority_min(scheduling_type);
+    u32 level = std::max(static_cast<u32>(new_priority) + 1, 4U);
+
+    struct sched_param params;
+    if (max_prio > min_prio) {
+        params.sched_priority = min_prio + ((max_prio - min_prio) * level) / 4;
+    } else {
+        params.sched_priority = min_prio - ((min_prio - max_prio) * level) / 4;
+    }
+
+    pthread_setschedparam(this_thread, scheduling_type, &params);
+}
+
+#endif
+
+#ifdef _WIN32
+
 bool AccurateSleep(const std::chrono::nanoseconds duration, std::chrono::nanoseconds* remaining,
                    const bool interruptible) {
     const auto begin_sleep = std::chrono::high_resolution_clock::now();
@@ -131,24 +185,6 @@ bool AccurateSleep(const std::chrono::nanoseconds duration, std::chrono::nanosec
 }
 
 #else
-
-void SetCurrentThreadPriority(ThreadPriority new_priority) {
-    pthread_t this_thread = pthread_self();
-
-    const auto scheduling_type = SCHED_OTHER;
-    s32 max_prio = sched_get_priority_max(scheduling_type);
-    s32 min_prio = sched_get_priority_min(scheduling_type);
-    u32 level = std::max(static_cast<u32>(new_priority) + 1, 4U);
-
-    struct sched_param params;
-    if (max_prio > min_prio) {
-        params.sched_priority = min_prio + ((max_prio - min_prio) * level) / 4;
-    } else {
-        params.sched_priority = min_prio - ((min_prio - max_prio) * level) / 4;
-    }
-
-    pthread_setschedparam(this_thread, scheduling_type, &params);
-}
 
 bool AccurateSleep(const std::chrono::nanoseconds duration, std::chrono::nanoseconds* remaining,
                    const bool interruptible) {

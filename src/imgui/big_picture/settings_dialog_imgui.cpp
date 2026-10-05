@@ -308,7 +308,9 @@ void SettingsWindow::ApplySuggested() {
     if (!suggested) {
         return;
     }
-    fullscreenModeSetting = GetComboIndex("Fullscreen", fullscreenModeOptions);
+    // Borderless, not exclusive: exclusive fullscreen takes over the display mode and leaves
+    // the window with no way to minimize or drop back to windowed on macOS.
+    fullscreenModeSetting = GetComboIndex("Fullscreen (Borderless)", fullscreenModeOptions);
     presentModeSetting = GetComboIndex("Immediate", presentModeOptions);
     fsrEnabledSetting = true;
     rcasEnabledSetting = true;

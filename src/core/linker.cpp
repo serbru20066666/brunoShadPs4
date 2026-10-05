@@ -148,6 +148,10 @@ void Linker::Execute(const std::vector<std::string>& args) {
 
     main_thread.Run([this, module, &args, has_libcinternal](std::stop_token) {
         Common::SetCurrentThreadName("Game:Main");
+        // This thread runs the guest's own code: on Apple Silicon's heterogeneous cores, leaving
+        // it at the default QoS gives the scheduler no reason to prefer a performance core for it
+        // over unrelated background work.
+        Common::SetCurrentThreadPriority(Common::ThreadPriority::VeryHigh);
 
 #ifndef _WIN32 // Clear any existing signal mask for game threads.
         sigset_t emptyset;
