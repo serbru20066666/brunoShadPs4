@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <filesystem>
 #include <variant>
 #include <tsl/robin_map.h>
 #include "shader_recompiler/profile.h"
@@ -123,7 +124,14 @@ private:
     Scheduler& scheduler;
     AmdGpu::Liverpool* liverpool;
     DescriptorHeap desc_heap;
+    /// Writes what the driver compiled so far to disk, so that the next start does not
+    /// compile it again.
+    void SaveDriverCache();
+    static std::filesystem::path DriverCachePath();
+
     vk::UniquePipelineCache pipeline_cache;
+    /// Pipelines compiled since the driver's cache was last written.
+    u32 unsaved_pipelines{};
     vk::UniquePipelineLayout pipeline_layout;
     Shader::Profile profile{};
     Shader::Pools pools;

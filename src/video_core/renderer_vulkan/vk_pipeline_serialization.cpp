@@ -2,6 +2,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <optional>
+#include <thread>
+#include <vector>
 
 #include "common/serdes.h"
 #include "core/emulator_settings.h"
@@ -21,6 +26,29 @@ static constexpr u32 PipelineKeyVersion = 3u;
 } // namespace Serialization
 
 namespace Vulkan {
+
+namespace {
+
+/// A cached pipeline whose shaders are loaded and which is only missing the driver's compilation.
+/// That is by far the slowest part of the warm up, so the pipelines are collected first and then
+/// compiled on several threads at once.
+struct PendingPipeline {
+    bool is_compute{};
+    GraphicsPipelineKey graphics_key{};
+    ComputePipelineKey compute_key{};
+    std::array<const Shader::Info*, MaxShaderStages> infos{};
+    std::array<vk::ShaderModule, MaxShaderStages> modules{};
+    // A copy: the original lives in a vector that grows while the rest of the cache is read.
+    std::optional<Shader::Gcn::FetchShaderData> fetch_shader;
+    GraphicsPipeline::SerializationSupport graphics_sdata{};
+    ComputePipeline::SerializationSupport compute_sdata{};
+    std::unique_ptr<GraphicsPipeline> graphics;
+    std::unique_ptr<ComputePipeline> compute;
+};
+
+std::vector<PendingPipeline> pending_pipelines;
+
+} // Anonymous namespace
 
 void RegisterPipelineData(const ComputePipelineKey& key,
                           ComputePipeline::SerializationSupport& sdata) {
@@ -162,9 +190,12 @@ bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
     const auto [it, is_new] = compute_pipelines.try_emplace(compute_key);
     ASSERT(is_new);
 
-    it.value() =
-        std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile, *pipeline_cache,
-                                          compute_key, *infos[0], modules[0], sdata, true);
+    auto& pending = pending_pipelines.emplace_back();
+    pending.is_compute = true;
+    pending.compute_key = compute_key;
+    pending.infos = infos;
+    pending.modules = modules;
+    pending.compute_sdata = sdata;
 
     infos.fill(nullptr);
     modules.fill(nullptr);
@@ -237,9 +268,14 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
     const auto [it, is_new] = graphics_pipelines.try_emplace(graphics_key);
     ASSERT(is_new);
 
-    it.value() = std::make_unique<GraphicsPipeline>(
-        instance, scheduler, desc_heap, profile, graphics_key, *pipeline_cache, infos,
-        runtime_infos, fetch_shader, modules, sdata, true);
+    auto& pending = pending_pipelines.emplace_back();
+    pending.graphics_key = graphics_key;
+    pending.infos = infos;
+    pending.modules = modules;
+    if (fetch_shader) {
+        pending.fetch_shader = *fetch_shader;
+    }
+    pending.graphics_sdata = std::move(sdata);
 
     infos.fill(nullptr);
     modules.fill(nullptr);
@@ -351,8 +387,9 @@ void PipelineCache::WarmUp() {
             keys.emplace_back(std::move(data));
         });
 
+    pending_pipelines.reserve(keys.size());
     std::ranges::for_each(keys, [&](std::vector<u8>& data) {
-        VideoCore::ReportLoading("Compiling cached shaders", num_total_pipelines,
+        VideoCore::ReportLoading("Reading the shader cache", num_total_pipelines,
                                  static_cast<u32>(keys.size()));
         ++num_total_pipelines;
 
@@ -379,6 +416,51 @@ void PipelineCache::WarmUp() {
             ++num_pipelines;
         }
     });
+
+    // Everything left is the driver's work, one pipeline independent from the next. Two cores
+    // are left alone so that the loading screen and the rest of the system stay responsive.
+    const u32 num_pending = static_cast<u32>(pending_pipelines.size());
+    const u32 num_workers =
+        std::clamp(std::thread::hardware_concurrency(), 3u, 34u) - 2u;
+    std::atomic<u32> next_pending{};
+    std::atomic<u32> num_compiled{};
+    {
+        std::vector<std::jthread> workers;
+        for (u32 i = 0; i < std::min(num_workers, num_pending); ++i) {
+            workers.emplace_back([&] {
+                for (u32 idx = next_pending++; idx < num_pending; idx = next_pending++) {
+                    auto& pending = pending_pipelines[idx];
+                    if (pending.is_compute) {
+                        pending.compute = std::make_unique<ComputePipeline>(
+                            instance, scheduler, desc_heap, profile, *pipeline_cache,
+                            pending.compute_key, *pending.infos[0], pending.modules[0],
+                            pending.compute_sdata, true);
+                    } else {
+                        pending.graphics = std::make_unique<GraphicsPipeline>(
+                            instance, scheduler, desc_heap, profile, pending.graphics_key,
+                            *pipeline_cache, pending.infos, runtime_infos,
+                            pending.fetch_shader ? &*pending.fetch_shader : nullptr,
+                            pending.modules, pending.graphics_sdata, true);
+                    }
+                    ++num_compiled;
+                }
+            });
+        }
+        // The loading screen is drawn from this thread, the one that owns the window.
+        while (num_compiled < num_pending) {
+            VideoCore::ReportLoading("Compiling cached shaders", num_compiled, num_pending + 1);
+            std::this_thread::sleep_for(std::chrono::milliseconds(8));
+        }
+    }
+    for (auto& pending : pending_pipelines) {
+        if (pending.is_compute) {
+            compute_pipelines[pending.compute_key] = std::move(pending.compute);
+        } else {
+            graphics_pipelines[pending.graphics_key] = std::move(pending.graphics);
+        }
+    }
+    pending_pipelines.clear();
+    pending_pipelines.shrink_to_fit();
 
     VideoCore::ReportLoading("Starting the game", 1, 1);
     LOG_INFO(Render, "Preloaded {} pipelines", num_pipelines);

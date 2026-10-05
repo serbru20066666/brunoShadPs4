@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
 #include <ranges>
 
+#include "common/elf_info.h"
 #include "common/hash.h"
 #include "common/io_file.h"
 #include "common/path_util.h"
@@ -324,15 +326,79 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .needs_clip_distance_emulation = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
         .supports_shader_stencil_export = instance_.IsShaderStencilExportSupported(),
     };
-    WarmUp();
 
-    auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique({});
+    // The driver's own cache of compiled pipelines, kept on disk between runs. It has to exist
+    // before the warm up, or everything the warm up compiles is compiled from scratch on every
+    // start. The driver checks that the data is its own and ignores it otherwise.
+    std::vector<u8> driver_cache;
+    if (EmulatorSettings.IsPipelineCacheEnabled()) {
+        Common::FS::IOFile file{DriverCachePath(), Common::FS::FileAccessMode::Read};
+        if (file.IsOpen()) {
+            driver_cache.resize(file.GetSize());
+            if (file.ReadRaw<u8>(driver_cache.data(), driver_cache.size()) != driver_cache.size()) {
+                driver_cache.clear();
+            }
+        }
+    }
+    const auto create_cache = [&] {
+        auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique({
+            .initialDataSize = driver_cache.size(),
+            .pInitialData = driver_cache.data(),
+        });
+        pipeline_cache = std::move(cache);
+        return cache_result;
+    };
+    auto cache_result = create_cache();
+    if (cache_result != vk::Result::eSuccess && !driver_cache.empty()) {
+        LOG_WARNING(Render_Vulkan, "The driver rejected its pipeline cache, starting a new one");
+        driver_cache.clear();
+        cache_result = create_cache();
+    }
     ASSERT_MSG(cache_result == vk::Result::eSuccess, "Failed to create pipeline cache: {}",
                vk::to_string(cache_result));
-    pipeline_cache = std::move(cache);
+    LOG_INFO(Render_Vulkan, "Driver pipeline cache: {} KB from disk", driver_cache.size() / 1024);
+
+    const auto warm_up_start = std::chrono::steady_clock::now();
+    WarmUp();
+    LOG_INFO(Render_Vulkan, "Pipeline warm up took {} ms",
+             std::chrono::duration_cast<std::chrono::milliseconds>(
+                 std::chrono::steady_clock::now() - warm_up_start)
+                 .count());
+    SaveDriverCache();
 }
 
-PipelineCache::~PipelineCache() = default;
+PipelineCache::~PipelineCache() {
+    SaveDriverCache();
+}
+
+std::filesystem::path PipelineCache::DriverCachePath() {
+    return Common::FS::GetUserPath(Common::FS::PathType::CacheDir) /
+           fmt::format("{}_driver_pipelines.bin", Common::ElfInfo::Instance().GameSerial());
+}
+
+void PipelineCache::SaveDriverCache() {
+    unsaved_pipelines = 0;
+    if (!EmulatorSettings.IsPipelineCacheEnabled() || !pipeline_cache) {
+        return;
+    }
+    const auto [result, data] = instance.GetDevice().getPipelineCacheData(*pipeline_cache);
+    if (result != vk::Result::eSuccess || data.empty()) {
+        return;
+    }
+    // Written under another name first: a cut off write must not replace a good file.
+    const auto path = DriverCachePath();
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    auto temporary = path;
+    temporary += ".new";
+    {
+        Common::FS::IOFile file{temporary, Common::FS::FileAccessMode::Create};
+        if (!file.IsOpen() || file.WriteRaw<u8>(data.data(), data.size()) != data.size()) {
+            return;
+        }
+    }
+    std::filesystem::rename(temporary, path, ec);
+}
 
 const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectParams params) {
     draw_indirect_params = params;
@@ -343,6 +409,11 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
     if (is_new) {
         const auto pipeline_hash = std::hash<GraphicsPipelineKey>{}(graphics_key);
         LOG_INFO(Render_Vulkan, "Compiling graphics pipeline {:#x}", pipeline_hash);
+        // Keep the driver's cache on disk reasonably fresh: the emulator is often closed
+        // without a chance to write it.
+        if (++unsaved_pipelines >= 48) {
+            SaveDriverCache();
+        }
 
         GraphicsPipeline::SerializationSupport sdata{};
         it.value() = std::make_unique<GraphicsPipeline>(

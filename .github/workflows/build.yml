@@ -82,17 +82,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-26]
+        # This fork is developed and tested on Windows only.
+        os: [windows-latest]
         include:
           - os: windows-latest
             compiler_cxx: clang-cl
             compiler_c: clang-cl
-          - os: ubuntu-latest
-            compiler_cxx: clang++
-            compiler_c: clang
-          - os: macos-26
-            compiler_cxx: clang++
-            compiler_c: clang
 
     steps:
       - name: Checkout repository
@@ -197,6 +192,8 @@ jobs:
           ${{github.workspace}}/build/amd_fidelityfx_vk.dll
 
   macos-sdl:
+    # This fork is developed and tested on Windows only.
+    if: github.repository == 'shadps4-emu/shadPS4'
     runs-on: macos-26
     needs: get-info
     steps:
@@ -257,6 +254,8 @@ jobs:
         path: upload/
 
   linux-sdl:
+    # This fork is developed and tested on Windows only.
+    if: github.repository == 'shadps4-emu/shadPS4'
     runs-on: ubuntu-24.04
     needs: get-info
     steps:
@@ -321,6 +320,8 @@ jobs:
         path: Shadps4-sdl.AppImage
 
   linux-sdl-gcc:
+    # This fork is developed and tested on Windows only.
+    if: github.repository == 'shadps4-emu/shadPS4'
     runs-on: ubuntu-24.04
     needs: get-info
     steps:
@@ -363,7 +364,7 @@ jobs:
   # the workflow is run by hand. Upstream publishes through the pre-release job below.
   fork-release:
     if: github.repository != 'shadps4-emu/shadPS4' && (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
-    needs: [get-info, windows-sdl, macos-sdl, linux-sdl]
+    needs: [get-info, windows-sdl]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -372,11 +373,6 @@ jobs:
       uses: actions/download-artifact@v8
       with:
         path: ./artifacts
-
-    - name: Make SDL artifacts executable
-      run: |
-        chmod -R a+x ./artifacts/shadps4-linux-sdl-*
-        chmod -R a+x ./artifacts/shadps4-macos-sdl-*
 
     - name: Compress individual directories (without parent directory)
       run: |
