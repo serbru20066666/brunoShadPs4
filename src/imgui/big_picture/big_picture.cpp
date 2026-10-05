@@ -8,6 +8,7 @@
 
 #include "common/logging/log.h"
 #include "common/path_util.h"
+#include "common/scm_rev.h"
 #include "core/devtools/layer.h"
 #include "core/emulator_settings.h"
 #include "core/file_format/psf.h"
@@ -232,6 +233,13 @@ void GetGameIconInfo(std::vector<IconInfo>& icons) {
                     if (const auto title_id = psf.GetString("TITLE_ID"); title_id.has_value()) {
                         icon.serial = *title_id;
                     }
+
+                    // Additional content (DLC) comes with a param.sfo of its own, but it is
+                    // not a game to list.
+                    if (const auto category = psf.GetString("CATEGORY");
+                        category.has_value() && category->starts_with("ac")) {
+                        continue;
+                    }
                 } else {
                     continue;
                 }
@@ -363,11 +371,7 @@ void Launch(char* executableName, bool sameProcess) {
         ImGui::SetWindowFontScale(uiScale);
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("%s", gameIcons.empty()
-                                      ? ""
-                                      : fmt::format("  {} {}", gameIcons.size(),
-                                                    gameIcons.size() == 1 ? "game" : "games")
-                                            .c_str());
+        ImGui::TextDisabled("%s", fmt::format("  {}", Common::g_version).c_str());
         ImGui::SameLine();
         {
             const float width =
@@ -420,19 +424,65 @@ void Launch(char* executableName, bool sameProcess) {
             }
         }
         ImGui::EndChild();
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.55f, 0.60f, 1.0f));
         ImGui::SetNextItemWidth(150.0f * uiScale);
         if (ImGui::IsWindowAppearing()) {
             sliderScale = uiScale;
         }
         ImGui::SliderFloat("##scale", &sliderScale, 0.5f, 2.5f, "");
-        ImGui::SameLine();
-        ImGui::TextUnformatted("Size");
-        ImGui::PopStyleColor();
-        // Only update when user is not interacting with slider
+        // Only apply the size once the slider is released, so it does not move under the mouse.
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             uiScale = sliderScale;
         }
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("Size");
+
+        // Whose work this is.
+        {
+            const char* credit = "A fork of shadPS4";
+            const float width = ImGui::CalcTextSize(credit).x + ImGui::CalcTextSize("About").x +
+                                ImGui::GetStyle().FramePadding.x * 2.0f +
+                                ImGui::GetStyle().ItemSpacing.x;
+            ImGui::SameLine();
+            ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - width);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", credit);
+            ImGui::SameLine();
+            if (ImGui::Button("About")) {
+                ImGui::OpenPopup("About brunoShadPs4");
+            }
+        }
+
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
+                                ImVec2(0.5f, 0.5f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(32.0f * uiScale, 28.0f * uiScale));
+        if (ImGui::BeginPopupModal("About brunoShadPs4", nullptr,
+                                   ImGuiWindowFlags_AlwaysAutoResize |
+                                       ImGuiWindowFlags_NoTitleBar)) {
+            ImGui::SetWindowFontScale(uiScale * 1.4f);
+            ImGui::TextUnformatted("brunoShadPs4");
+            ImGui::SetWindowFontScale(uiScale);
+            ImGui::TextDisabled(
+                "%s",
+                fmt::format("Version {}  ({})", Common::g_version, Common::g_scm_desc).c_str());
+            ImGui::Dummy(ImVec2(0.0f, 6.0f * uiScale));
+            ImGui::TextUnformatted("A fork of shadPS4, the PlayStation 4 emulator.");
+            ImGui::TextUnformatted("All the credit for the emulator goes to the shadPS4 Emulator");
+            ImGui::TextUnformatted("Project and its contributors.");
+            ImGui::TextDisabled("github.com/shadps4-emu/shadPS4  -  GPL-2.0-or-later");
+            ImGui::Dummy(ImVec2(0.0f, 6.0f * uiScale));
+            ImGui::TextUnformatted("This fork adds");
+            ImGui::TextDisabled("Frame generation with AMD FSR 3 (FidelityFX SDK, MIT)");
+            ImGui::TextDisabled("Fixes and speed-ups for God of War III and inFamous Second Son");
+            ImGui::TextDisabled("This launcher, set in Poppins (OFL)");
+            ImGui::TextDisabled("github.com/serbru20066666/brunoShadPs4");
+            ImGui::Dummy(ImVec2(0.0f, 8.0f * uiScale));
+            if (Theme::AccentButton("Close") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleVar();
 
         if (showSettings) {
             settingsWindow.DrawSettings(&showSettings, applySettings);

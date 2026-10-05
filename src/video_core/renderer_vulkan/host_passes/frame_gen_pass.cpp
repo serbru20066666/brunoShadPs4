@@ -42,6 +42,10 @@ constexpr vk::ImageSubresourceLayers ColorLayers = {
 /// a flat one tells the interpolation that nothing is hidden behind anything else.
 constexpr float FlatDepth = 0.5f;
 
+/// Frames the interpolation takes to start using optical flow after a reset. FSR's shader counts
+/// ten; a couple more keep clear of the edge.
+constexpr u32 SettleFrames = 12;
+
 void Transition(vk::CommandBuffer cmdbuf, vk::Image image, vk::ImageLayout from,
                 vk::ImageLayout to) {
     const vk::ImageMemoryBarrier2 barrier{
@@ -354,7 +358,11 @@ struct FrameGenPass::Impl {
         Transition(cmdbuf, output.image, Layout::eGeneral, Layout::eShaderReadOnlyOptimal);
         ++frame_id;
 
-        const bool generated = done && !generate.reset;
+        // For its first frames after a reset the interpolation ignores optical flow and blends
+        // the two frames in place, which shows as a translucent ghost of the previous one. Those
+        // are not worth showing: the rendered frames go out alone until it has settled.
+        frames_since_reset = generate.reset ? 0 : frames_since_reset + 1;
+        const bool generated = done && frames_since_reset >= SettleFrames;
         has_history = done;
         if (!generated) {
             return std::nullopt;
@@ -377,6 +385,7 @@ struct FrameGenPass::Impl {
     vk::Extent2D render_size{};
     bool is_hdr{};
     bool has_history{};
+    u32 frames_since_reset{};
     bool inputs_cleared{};
     u64 frame_id{};
 
