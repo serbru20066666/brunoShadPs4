@@ -204,16 +204,16 @@ void FillGameDetails(std::vector<IconInfo>& icons) {
                             : fmt::format("{} {} x {}", Tr("Windowed"), out_width, out_height);
             // In full screen the picture is enlarged to the display, named the usual way.
             const bool fsr = StoredSetting(game, global, "GPU", "fsr_enabled", false);
-            if (full_screen && display_height > 0) {
+            if (!fsr) {
+                icon.details[2] = Tr("Without FSR");
+            } else if (full_screen && display_height > 0) {
                 const std::string target = display_height == 2160 ? "4K"
                                            : display_height == 4320
                                                ? "8K"
                                                : fmt::format("{}p", display_height);
-                icon.details[2] = fmt::format(fmt::runtime(Tr(fsr ? "Enlarged to {} with FSR"
-                                                                  : "Enlarged to {} without FSR")),
-                                              target);
+                icon.details[2] = fmt::format(fmt::runtime(Tr("Enlarged to {} with FSR")), target);
             } else {
-                icon.details[2] = Tr(fsr ? "Enlarged with FSR" : "Enlarged without FSR");
+                icon.details[2] = Tr("Enlarged with FSR");
             }
             icon.details[3] = Tr(StoredSetting(game, global, "GPU", "frame_generation", false)
                                      ? "Frame generation: on"
