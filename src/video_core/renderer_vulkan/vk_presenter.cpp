@@ -12,10 +12,10 @@
 #include "core/devtools/layer.h"
 #include "core/emulator_settings.h"
 #include "core/libraries/system/systemservice.h"
+#include "imgui/big_picture/translation.h"
 #include "imgui/friends_layer.h"
 #include "imgui/invitation_prompt_layer.h"
 #include "imgui/notifications_layer.h"
-#include "imgui/big_picture/translation.h"
 #include "imgui/renderer/imgui_core.h"
 #include "imgui/renderer/imgui_impl_vulkan.h"
 #include "imgui/shadnet_notifications_layer.h"
@@ -926,11 +926,23 @@ void Presenter::DrawLoadingScreen(std::string_view stage, u32 done, u32 total) {
     // once the main loop starts.
     SDL_PumpEvents();
 
-    if (window.GetWidth() != swapchain.GetWidth() || window.GetHeight() != swapchain.GetHeight()) {
-        swapchain.Recreate(window.GetWidth(), window.GetHeight());
+    // The size the window keeps is only brought up to date by the main loop, so the real one is
+    // asked for. A minimized window has nothing to draw on: the loading goes on without its
+    // screen until the window is back.
+    int width = 0;
+    int height = 0;
+    SDL_Window* sdl_window = window.GetSDLWindow();
+    SDL_GetWindowSizeInPixels(sdl_window, &width, &height);
+    if ((SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_MINIMIZED) || width <= 0 || height <= 0) {
+        return;
+    }
+
+    if (width != static_cast<int>(swapchain.GetWidth()) ||
+        height != static_cast<int>(swapchain.GetHeight())) {
+        swapchain.Recreate(width, height);
     }
     if (!swapchain.AcquireNextImage()) {
-        swapchain.Recreate(window.GetWidth(), window.GetHeight());
+        swapchain.Recreate(width, height);
         if (!swapchain.AcquireNextImage()) {
             return;
         }
@@ -985,9 +997,8 @@ void Presenter::DrawLoadingScreen(std::string_view stage, u32 done, u32 total) {
                                      IM_COL32(199, 237, 240, 255), bar_height * 0.5f);
         }
         const char* stage_text = BigPictureMode::Tr(stage);
-        const std::string status = total > 0
-                                       ? fmt::format("{}  {} / {}", stage_text, done, total)
-                                       : fmt::format("{}...", stage_text);
+        const std::string status = total > 0 ? fmt::format("{}  {} / {}", stage_text, done, total)
+                                             : fmt::format("{}...", stage_text);
         centered(status, bar_max.y + 18.0f * scale, 1.1f, IM_COL32(180, 180, 190, 255));
         ImGui::SetWindowFontScale(1.0f);
     }
