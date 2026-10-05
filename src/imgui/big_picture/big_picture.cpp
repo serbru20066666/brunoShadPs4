@@ -33,6 +33,7 @@ bool done = false;
 bool showSettings = false;
 
 std::filesystem::path runEbootPath = "";
+std::string runSerial = "";
 std::vector<IconInfo> gameIcons = {};
 
 float uiScale = 1.0f;
@@ -149,6 +150,7 @@ void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor) {
             Core::FileSys::MntPoints::ignore_game_patches =
                 ImGui::IsKeyDown(ImGuiKey::ImGuiKey_LeftCtrl);
             runEbootPath = gameIcons[i].ebootPath;
+            runSerial = gameIcons[i].serial;
         }
 
         // Make the group as large as the card, whatever was drawn inside.
@@ -514,8 +516,15 @@ void Launch(char* executableName, bool sameProcess) {
         if (sameProcess) {
             emulator->Run(runEbootPath);
         } else {
-            emulator->Relaunch(
-                {"--log-append", "--game", Common::FS::PathToUTF8String(runEbootPath)});
+            std::vector<std::string> args{"--log-append", "--game",
+                                          Common::FS::PathToUTF8String(runEbootPath)};
+            // A patch file named after the game in the patches folder is applied with it.
+            const auto patch =
+                Common::FS::GetUserPath(Common::FS::PathType::PatchesDir) / (runSerial + ".xml");
+            if (!runSerial.empty() && std::filesystem::exists(patch)) {
+                args.insert(args.end(), {"--patch", Common::FS::PathToUTF8String(patch)});
+            }
+            emulator->Relaunch(std::move(args));
         }
     }
 }

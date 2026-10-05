@@ -247,8 +247,8 @@ struct Suggested {
     bool frame_generation;
 };
 constexpr std::array SuggestedSettings{
-    Suggested{"CUSA01623", 0, false, true, true},  // God of War III Remastered
-    Suggested{"CUSA00004", 2, true, false, false}, // inFamous Second Son
+    Suggested{"CUSA01623", 0, false, true, true}, // God of War III Remastered
+    Suggested{"CUSA00004", 2, true, false, true}, // inFamous Second Son
 };
 
 const Suggested* FindSuggested(const std::string& profile) {

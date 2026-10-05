@@ -156,6 +156,10 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, Input::GameControllers* controller
     // the cached size so the first swapchain and the splashscreen use the real drawable size.
     SDL_GetWindowSizeInPixels(window, &width, &height);
 
+    // Take the focus: a window started from the launcher can open behind others, and the
+    // emulator ignores the controller while its window is not the active one.
+    SDL_RaiseWindow(window);
+
     SDL_InitSubSystem(SDL_INIT_GAMEPAD);
 
 #if defined(SDL_PLATFORM_WIN32)

@@ -813,6 +813,10 @@ void Emulator::Restart(std::filesystem::path eboot_path,
         std::quick_exit(1);
     }
 
+    // Let the new process bring its window to the front: without the focus the game window
+    // gets no controller input.
+    AllowSetForegroundWindow(pi.dwProcessId);
+
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 #else
