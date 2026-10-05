@@ -3,7 +3,10 @@
 
 #include <algorithm>
 #include <bit>
+#include <ctime>
 #include <fstream>
+#include <sstream>
+#include <nlohmann/json.hpp>
 #include <stb_image.h>
 
 #include "common/logging/log.h"
@@ -73,6 +76,135 @@ std::filesystem::path UpdateChecker(const std::string sceItem, std::filesystem::
     return updatedPath;
 }
 
+nlohmann::json ReadJson(const std::filesystem::path& path) {
+    std::ifstream in{path};
+    if (!in) {
+        return {};
+    }
+    // A damaged file only means that there is nothing to show from it.
+    return nlohmann::json::parse(in, nullptr, false);
+}
+
+/// The settings a game will start with are read from the files, not from the loaded settings:
+/// those hold the profile of one game at most.
+template <typename T>
+T StoredSetting(const nlohmann::json& game, const nlohmann::json& global, const char* group,
+                const char* key, T fallback) {
+    for (const auto* file : {&game, &global}) {
+        if (file->is_object() && file->contains(group) && (*file)[group].contains(key)) {
+            const auto& value = (*file)[group][key];
+            if (!value.is_null()) {
+                return value.get<T>();
+            }
+        }
+    }
+    return fallback;
+}
+
+const char* ConsoleLanguageName(int id) {
+    static constexpr std::array<const char*, 31> names = {
+        "Japanese",
+        "English (United States)",
+        "French (France)",
+        "Spanish (Spain)",
+        "German",
+        "Italian",
+        "Dutch",
+        "Portuguese (Portugal)",
+        "Russian",
+        "Korean",
+        "Traditional Chinese",
+        "Simplified Chinese",
+        "Finnish",
+        "Swedish",
+        "Danish",
+        "Norwegian (Bokmaal)",
+        "Polish",
+        "Portuguese (Brazil)",
+        "English (United Kingdom)",
+        "Turkish",
+        "Spanish (Latin America)",
+        "Arabic",
+        "French (Canada)",
+        "Czech",
+        "Hungarian",
+        "Greek",
+        "Romanian",
+        "Thai",
+        "Vietnamese",
+        "Indonesian",
+        "Ukrainian",
+    };
+    return id >= 0 && id < static_cast<int>(names.size()) ? Tr(names[id]) : "";
+}
+
+/// Fills in what each card says under the name of its game.
+void FillGameDetails(std::vector<IconInfo>& icons) {
+    using namespace Common::FS;
+    const auto global = ReadJson(GetUserPath(PathType::UserDir) / "config.json");
+
+    // Full screen shows the game at the size of the display.
+    int display_width = 0;
+    int display_height = 0;
+    if (const SDL_DisplayMode* mode = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay())) {
+        display_width = static_cast<int>(mode->w * mode->pixel_density);
+        display_height = static_cast<int>(mode->h * mode->pixel_density);
+    }
+
+    for (auto& icon : icons) {
+        const auto game = ReadJson(GetUserPath(PathType::CustomConfigs) / (icon.serial + ".json"));
+        try {
+            const bool full_screen =
+                StoredSetting(game, global, "GPU", "full_screen", false) &&
+                StoredSetting<std::string>(game, global, "GPU", "full_screen_mode", "Windowed") !=
+                    "Windowed";
+            const int width = full_screen
+                                  ? display_width
+                                  : StoredSetting(game, global, "GPU", "window_width", 1280);
+            const int height = full_screen
+                                   ? display_height
+                                   : StoredSetting(game, global, "GPU", "window_height", 720);
+            icon.details[0] = fmt::format("{} x {}", width, height);
+            icon.details[1] = Tr(full_screen ? "Full screen" : "Windowed");
+            icon.details[2] =
+                ConsoleLanguageName(StoredSetting(game, global, "General", "console_language", 1));
+        } catch (const nlohmann::json::exception&) {
+            icon.details[0].clear();
+            icon.details[1].clear();
+            icon.details[2].clear();
+        }
+        icon.details[3] = Tr("Not played yet");
+        icon.details[4].clear();
+    }
+
+    // One line per game: its serial, the time played as h:mm:ss and when it was last played.
+    std::ifstream play_times{GetUserPath(PathType::UserDir) / "play_time.txt"};
+    std::string line;
+    while (std::getline(play_times, line)) {
+        // A line that cannot be read is skipped, the rest of the file still counts.
+        std::istringstream fields{line};
+        std::string serial;
+        std::string played;
+        std::time_t last{};
+        if (!(fields >> serial >> played >> last)) {
+            continue;
+        }
+        const auto icon = std::ranges::find(icons, serial, &IconInfo::serial);
+        int hours = 0;
+        int minutes = 0;
+        if (icon == icons.end() || std::sscanf(played.c_str(), "%d:%d", &hours, &minutes) != 2) {
+            continue;
+        }
+        icon->details[3] = hours > 0 ? fmt::format("{}{} h {} min", Tr("Played: "), hours, minutes)
+                                     : fmt::format("{}{} min", Tr("Played: "), minutes);
+        if (const std::tm* when = std::localtime(&last)) {
+            char date[32]{};
+            std::strftime(date, sizeof(date), Tr("%Y-%m-%d"), when);
+            icon->details[4] = fmt::format("{}{}", Tr("Last played: "), date);
+        }
+    }
+}
+
 /// Draws the game grid: one card per game with its cover, its name and its two actions. Sets
 /// `settingsFor` to the game whose settings button was pressed.
 void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor, int& suggestFor) {
@@ -82,8 +214,12 @@ void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor, int& sugge
     const float cover = gameImageSize * uiScale;
     const float line = ImGui::GetTextLineHeight();
     const float frame = ImGui::GetFrameHeight();
-    const ImVec2 card{cover + pad * 2.0f,
-                      pad + cover + 12.0f * uiScale + line * 2.0f + 12.0f * uiScale + frame + pad};
+    // Five smaller lines under the name say how the game is set up and how much it was played.
+    constexpr float details_scale = 0.74f;
+    const float details_line = line * details_scale + 2.0f * uiScale;
+    const float details_height = details_line * 5.0f + 16.0f * uiScale;
+    const ImVec2 card{cover + pad * 2.0f, pad + cover + 12.0f * uiScale + line * 2.0f +
+                                              details_height + 12.0f * uiScale + frame + pad};
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
     float rowWidth = 0.0f;
 
@@ -154,6 +290,19 @@ void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor, int& sugge
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + cover);
         ImGui::TextWrapped("%s", gameIcons[i].title.c_str());
         ImGui::PopTextWrapPos();
+        ImGui::PopClipRect();
+
+        const float details_top = title_min.y + line * 2.0f + 8.0f * uiScale;
+        ImGui::PushClipRect({cover_min.x, details_top},
+                            {cover_max.x, details_top + details_line * 5.0f}, true);
+        ImGui::SetWindowFontScale(uiScale * details_scale);
+        ImGui::PushStyleColor(ImGuiCol_Text, Theme::TextDim);
+        for (int row = 0; row < 5; ++row) {
+            ImGui::SetCursorScreenPos({cover_min.x, details_top + details_line * row});
+            ImGui::TextUnformatted(gameIcons[i].details[row].c_str());
+        }
+        ImGui::PopStyleColor();
+        ImGui::SetWindowFontScale(uiScale);
         ImGui::PopClipRect();
 
         ImGui::SetCursorScreenPos({cover_min.x, pos.y + card.y - pad - frame});
@@ -287,6 +436,7 @@ void GetGameIconInfo(std::vector<IconInfo>& icons) {
     std::sort(icons.begin(), icons.end(), [](const IconInfo& a, const IconInfo& b) {
         return a.title < b.title; // Alphabetical order
     });
+    FillGameDetails(icons);
 }
 
 void Launch(char* executableName, bool sameProcess) {
