@@ -926,6 +926,24 @@ void Presenter::DrawLoadingScreen(std::string_view stage, u32 done, u32 total) {
     // once the main loop starts.
     SDL_PumpEvents();
 
+    // All but leaving full screen, which cannot wait: F11 or Alt+Enter work here as they do
+    // once the game runs.
+    SDL_Event key_events[16];
+    const int num_keys =
+        SDL_PeepEvents(key_events, 16, SDL_GETEVENT, SDL_EVENT_KEY_DOWN, SDL_EVENT_KEY_DOWN);
+    for (int i = 0; i < num_keys; ++i) {
+        const auto& key = key_events[i].key;
+        const bool toggle =
+            key.key == SDLK_F11 ||
+            ((key.key == SDLK_RETURN || key.key == SDLK_KP_ENTER) && (key.mod & SDL_KMOD_ALT));
+        if (toggle && !key.repeat) {
+            SDL_Window* sdl_window = window.GetSDLWindow();
+            SDL_SetWindowFullscreen(sdl_window,
+                                    !(SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_FULLSCREEN));
+            SDL_SyncWindow(sdl_window);
+        }
+    }
+
     // The size the window keeps is only brought up to date by the main loop, so the real one is
     // asked for. A minimized window has nothing to draw on: the loading goes on without its
     // screen until the window is back.
