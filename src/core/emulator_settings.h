@@ -199,6 +199,7 @@ struct GeneralSettings {
     Setting<bool> show_fps_counter{false};
     Setting<int> console_language{1};
     Setting<int> big_picture_scale{1000};
+    Setting<std::string> gui_language{"System"};
     Setting<std::string> shadnet_server{"srv.shadps4.net:31313"};
     Setting<std::string> shadnet_webapi_server{"http://srv.shadps4.net:31315"};
     Setting<std::string> signaling_info{};
@@ -241,7 +242,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(GeneralSettings, install_dirs, addon_install_
                                    trophy_popup_disabled, trophy_notification_duration, show_splash,
                                    trophy_notification_side, connected_to_network,
                                    discord_rpc_enabled, show_fps_counter, console_language,
-                                   big_picture_scale, shadnet_server, shadnet_webapi_server,
+                                   big_picture_scale, gui_language, shadnet_server, shadnet_webapi_server,
                                    signaling_info, enable_upnp, redzone_patches)
 
 // -------------------------------
@@ -671,6 +672,7 @@ public:
     SETTING_FORWARD_BOOL(m_general, ShowFpsCounter, show_fps_counter)
     SETTING_FORWARD(m_general, ConsoleLanguage, console_language)
     SETTING_FORWARD(m_general, BigPictureScale, big_picture_scale)
+    SETTING_FORWARD(m_general, GuiLanguage, gui_language)
     SETTING_FORWARD(m_general, ShadNetServer, shadnet_server)
     SETTING_FORWARD(m_general, ShadNetWebApiServer, shadnet_webapi_server)
     SETTING_FORWARD(m_general, SignalingInfo, signaling_info)

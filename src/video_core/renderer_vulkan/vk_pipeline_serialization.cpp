@@ -420,8 +420,7 @@ void PipelineCache::WarmUp() {
     // Everything left is the driver's work, one pipeline independent from the next. Two cores
     // are left alone so that the loading screen and the rest of the system stay responsive.
     const u32 num_pending = static_cast<u32>(pending_pipelines.size());
-    const u32 num_workers =
-        std::clamp(std::thread::hardware_concurrency(), 3u, 34u) - 2u;
+    const u32 num_workers = std::clamp(std::thread::hardware_concurrency(), 3u, 34u) - 2u;
     std::atomic<u32> next_pending{};
     std::atomic<u32> num_compiled{};
     {

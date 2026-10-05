@@ -15,6 +15,7 @@
 #include "imgui/friends_layer.h"
 #include "imgui/invitation_prompt_layer.h"
 #include "imgui/notifications_layer.h"
+#include "imgui/big_picture/translation.h"
 #include "imgui/renderer/imgui_core.h"
 #include "imgui/renderer/imgui_impl_vulkan.h"
 #include "imgui/shadnet_notifications_layer.h"
@@ -983,8 +984,10 @@ void Presenter::DrawLoadingScreen(std::string_view stage, u32 done, u32 total) {
                                      {bar_min.x + bar_width * to, bar_max.y},
                                      IM_COL32(199, 237, 240, 255), bar_height * 0.5f);
         }
-        const std::string status = total > 0 ? fmt::format("{}  {} / {}", stage, done, total)
-                                             : fmt::format("{}...", stage);
+        const char* stage_text = BigPictureMode::Tr(stage);
+        const std::string status = total > 0
+                                       ? fmt::format("{}  {} / {}", stage_text, done, total)
+                                       : fmt::format("{}...", stage_text);
         centered(status, bar_max.y + 18.0f * scale, 1.1f, IM_COL32(180, 180, 190, 255));
         ImGui::SetWindowFontScale(1.0f);
     }

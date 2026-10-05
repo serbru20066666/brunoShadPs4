@@ -20,6 +20,7 @@
 #include "imgui/big_picture/imgui_impl_sdlrenderer3.h"
 #include "imgui/big_picture/settings_dialog_imgui.h"
 #include "imgui/big_picture/theme.h"
+#include "imgui/big_picture/translation.h"
 #include "imgui/imgui_std.h"
 #include "imgui/renderer/font_data.h"
 #include "imgui/renderer/font_stack.h"
@@ -136,13 +137,13 @@ void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor, int& sugge
             ImGui::SetWindowFontScale(uiScale * 0.72f);
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
                                 ImVec2(10.0f * uiScale, 5.0f * uiScale));
-            if (Theme::AccentButton("Use recommended settings##suggest")) {
+            if (Theme::AccentButton(Tr("Use recommended settings##suggest"))) {
                 suggestFor = i;
             }
             ImGui::PopStyleVar();
             ImGui::SetWindowFontScale(uiScale);
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Settings tested with this game. You can change them later.");
+                ImGui::SetTooltip(Tr("Settings tested with this game. You can change them later."));
             }
         }
 
@@ -158,9 +159,9 @@ void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor, int& sugge
         ImGui::SetCursorScreenPos({cover_min.x, pos.y + card.y - pad - frame});
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
                             ImVec2(16.0f * uiScale, ImGui::GetStyle().FramePadding.y));
-        play |= Theme::AccentButton("Play");
+        play |= Theme::AccentButton(Tr("Play"));
         ImGui::SameLine(0.0f, 8.0f * uiScale);
-        if (ImGui::Button("Settings")) {
+        if (ImGui::Button(Tr("Settings"))) {
             settingsFor = i;
         }
         ImGui::PopStyleVar();
@@ -389,7 +390,7 @@ void Launch(char* executableName, bool sameProcess) {
         // Top bar: the name on the left, the two actions on the right.
         ImGui::SetWindowFontScale(uiScale * 1.5f);
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("brunoShadPs4");
+        ImGui::TextUnformatted(Tr("brunoShadPs4"));
         ImGui::SetWindowFontScale(uiScale);
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
@@ -397,15 +398,15 @@ void Launch(char* executableName, bool sameProcess) {
         ImGui::SameLine();
         {
             const float width =
-                ImGui::CalcTextSize("Add games").x + ImGui::CalcTextSize("Settings").x +
+                ImGui::CalcTextSize(Tr("Add games")).x + ImGui::CalcTextSize(Tr("Settings")).x +
                 ImGui::GetStyle().FramePadding.x * 4.0f + ImGui::GetStyle().ItemSpacing.x;
             ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - width);
         }
-        if (ImGui::Button("Add games")) {
+        if (ImGui::Button(Tr("Add games"))) {
             ImGuiEmuSettings::SettingsWindow::RequestGamesFolder();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Settings")) {
+        if (ImGui::Button(Tr("Settings"))) {
             EmulatorSettings.SetBigPictureScale(static_cast<int>(uiScale * 1000));
             EmulatorSettings.Save();
             settingsWindow.Prepare();
@@ -447,9 +448,9 @@ void Launch(char* executableName, bool sameProcess) {
         }
         if (gameIcons.empty()) {
             ImGui::Dummy(ImVec2(0.0f, 40.f * uiScale));
-            Overlay::TextCentered("No games yet. Add the folder that contains your games.");
+            Overlay::TextCentered(Tr("No games yet. Add the folder that contains your games."));
             ImGui::Dummy(ImVec2(0.0f, 10.f * uiScale));
-            const char* label = "Add games folder";
+            const char* label = Tr("Add games folder");
             const float width =
                 ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0f;
             ImGui::SetCursorPosX((ImGui::GetWindowWidth() - width) * 0.5f);
@@ -469,12 +470,12 @@ void Launch(char* executableName, bool sameProcess) {
         }
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("Size");
+        ImGui::TextDisabled(Tr("Size"));
 
         // Whose work this is.
         {
-            const char* credit = "A fork of shadPS4";
-            const float width = ImGui::CalcTextSize(credit).x + ImGui::CalcTextSize("About").x +
+            const char* credit = Tr("A fork of shadPS4");
+            const float width = ImGui::CalcTextSize(credit).x + ImGui::CalcTextSize(Tr("About")).x +
                                 ImGui::GetStyle().FramePadding.x * 2.0f +
                                 ImGui::GetStyle().ItemSpacing.x;
             ImGui::SameLine();
@@ -482,36 +483,38 @@ void Launch(char* executableName, bool sameProcess) {
             ImGui::AlignTextToFramePadding();
             ImGui::TextDisabled("%s", credit);
             ImGui::SameLine();
-            if (ImGui::Button("About")) {
-                ImGui::OpenPopup("About brunoShadPs4");
+            if (ImGui::Button(Tr("About"))) {
+                ImGui::OpenPopup(Tr("About brunoShadPs4"));
             }
         }
 
         ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
                                 ImVec2(0.5f, 0.5f));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(32.0f * uiScale, 28.0f * uiScale));
-        if (ImGui::BeginPopupModal("About brunoShadPs4", nullptr,
+        if (ImGui::BeginPopupModal(Tr("About brunoShadPs4"), nullptr,
                                    ImGuiWindowFlags_AlwaysAutoResize |
                                        ImGuiWindowFlags_NoTitleBar)) {
             ImGui::SetWindowFontScale(uiScale * 1.4f);
-            ImGui::TextUnformatted("brunoShadPs4");
+            ImGui::TextUnformatted(Tr("brunoShadPs4"));
             ImGui::SetWindowFontScale(uiScale);
+            ImGui::TextDisabled("%s", fmt::format("{} {}  ({})", Tr("Version"), Common::g_version,
+                                                  Common::g_scm_desc)
+                                          .c_str());
+            ImGui::Dummy(ImVec2(0.0f, 6.0f * uiScale));
+            ImGui::TextUnformatted(Tr("A fork of shadPS4, the PlayStation 4 emulator."));
+            ImGui::TextUnformatted(
+                Tr("All the credit for the emulator goes to the shadPS4 Emulator"));
+            ImGui::TextUnformatted(Tr("Project and its contributors."));
+            ImGui::TextDisabled(Tr("github.com/shadps4-emu/shadPS4  -  GPL-2.0-or-later"));
+            ImGui::Dummy(ImVec2(0.0f, 6.0f * uiScale));
+            ImGui::TextUnformatted(Tr("This fork adds"));
+            ImGui::TextDisabled(Tr("Frame generation with AMD FSR 3 (FidelityFX SDK, MIT)"));
             ImGui::TextDisabled(
-                "%s",
-                fmt::format("Version {}  ({})", Common::g_version, Common::g_scm_desc).c_str());
-            ImGui::Dummy(ImVec2(0.0f, 6.0f * uiScale));
-            ImGui::TextUnformatted("A fork of shadPS4, the PlayStation 4 emulator.");
-            ImGui::TextUnformatted("All the credit for the emulator goes to the shadPS4 Emulator");
-            ImGui::TextUnformatted("Project and its contributors.");
-            ImGui::TextDisabled("github.com/shadps4-emu/shadPS4  -  GPL-2.0-or-later");
-            ImGui::Dummy(ImVec2(0.0f, 6.0f * uiScale));
-            ImGui::TextUnformatted("This fork adds");
-            ImGui::TextDisabled("Frame generation with AMD FSR 3 (FidelityFX SDK, MIT)");
-            ImGui::TextDisabled("Fixes and speed-ups for God of War III and inFamous Second Son");
-            ImGui::TextDisabled("This launcher, set in Poppins (OFL)");
-            ImGui::TextDisabled("github.com/serbru20066666/brunoShadPs4");
+                Tr("Fixes and speed-ups for God of War III and inFamous Second Son"));
+            ImGui::TextDisabled(Tr("This launcher, set in Poppins (OFL)"));
+            ImGui::TextDisabled(Tr("github.com/serbru20066666/brunoShadPs4"));
             ImGui::Dummy(ImVec2(0.0f, 8.0f * uiScale));
-            if (Theme::AccentButton("Close") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            if (Theme::AccentButton(Tr("Close")) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();

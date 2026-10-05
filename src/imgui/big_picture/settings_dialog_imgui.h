@@ -138,6 +138,8 @@ private:
     const std::vector<std::string> fullscreenModeOptions = {"Windowed", "Fullscreen",
                                                             "Fullscreen (Borderless)"};
     const std::vector<std::string> audioBackendOptions = {"SDL", "OpenAL"};
+    const std::vector<std::string> guiLanguageOptions = {"System", "English", "Español"};
+    int guiLanguageSetting{};
     const std::vector<std::string> presentModeOptions = {"Mailbox", "Fifo", "Immediate"};
     const std::vector<std::string> hideCursorOptions = {"Never", "Idle", "Always"};
     const std::vector<std::string> trophySideOptions = {"left", "right", "top", "bottom"};

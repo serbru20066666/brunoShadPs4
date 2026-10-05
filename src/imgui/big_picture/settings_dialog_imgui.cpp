@@ -23,12 +23,15 @@
 #include "imgui/imgui_std.h"
 #include "settings_dialog_imgui.h"
 #include "theme.h"
+#include "translation.h"
 
 CMRC_DECLARE(res);
 
 constexpr float gameImageSize = 200.f;
 
 namespace ImGuiEmuSettings {
+
+using BigPictureMode::Tr;
 
 int SettingsWindow::GetComboIndex(std::string selection, std::vector<std::string> options) {
     for (int i = 0; i < options.size(); i++) {
@@ -53,6 +56,7 @@ void SettingsWindow::LoadSettings(std::string profile) {
     }
 
     consoleLanguageSetting = GetComboIndex(language, languageOptions);
+    guiLanguageSetting = GetComboIndex(EmulatorSettings.GetGuiLanguage(), guiLanguageOptions);
     volumeSetting = EmulatorSettings.GetVolumeSlider();
     showSplashSetting = EmulatorSettings.IsShowSplash();
     audioBackendSetting = EmulatorSettings.GetAudioBackend();
@@ -113,13 +117,18 @@ void SettingsWindow::SaveSettings(std::string profile) {
     /////////// General Tab
     EmulatorSettings.SetConsoleLanguage(languageMap.at(languageOptions.at(consoleLanguageSetting)),
                                         isSpecific);
+    if (!isSpecific) {
+        // The language of the interface is the same for every game.
+        EmulatorSettings.SetGuiLanguage(guiLanguageOptions.at(guiLanguageSetting));
+        BigPictureMode::SetGuiLanguage(guiLanguageOptions.at(guiLanguageSetting));
+    }
     EmulatorSettings.SetVolumeSlider(volumeSetting, isSpecific);
     EmulatorSettings.SetShowSplash(showSplashSetting, isSpecific);
     EmulatorSettings.SetAudioBackend(audioBackendSetting, isSpecific);
 
     /////////// Graphics Tab
     bool isFullscreen = fullscreenModeSetting != 0;
-    EmulatorSettings.SetFullScreen(isFullscreen);
+    EmulatorSettings.SetFullScreen(isFullscreen, isSpecific);
     EmulatorSettings.SetFullScreenMode(fullscreenModeOptions.at(fullscreenModeSetting), isSpecific);
     EmulatorSettings.SetPresentMode(presentModeOptions.at(presentModeSetting), isSpecific);
     EmulatorSettings.SetWindowHeight(windowHeightSetting, isSpecific);
@@ -144,7 +153,8 @@ void SettingsWindow::SaveSettings(std::string profile) {
     /////////// Trophy Tab
     EmulatorSettings.SetTrophyPopupDisabled(trophyPopupDisabledSetting, isSpecific);
     EmulatorSettings.SetTrophyNotificationSide(trophySideOptions.at(trophySideSetting), isSpecific);
-    EmulatorSettings.SetTrophyNotificationDuration(static_cast<double>(trophyDurationSetting));
+    EmulatorSettings.SetTrophyNotificationDuration(static_cast<double>(trophyDurationSetting),
+                                                   isSpecific);
 
     /////////// Log Tab
     EmulatorSettings.SetLogEnable(logEnableSetting, isSpecific);
@@ -497,13 +507,13 @@ void SettingsWindow::AddCategory(std::string name,
     ImGui::SameLine();
     const bool selected = currentCategory == category;
     if (selected) {
-        if (BigPictureMode::Theme::AccentButton(name.c_str())) {
+        if (BigPictureMode::Theme::AccentButton(Tr(name))) {
             currentCategory = category;
         }
         return;
     }
     ImGui::PushStyleColor(ImGuiCol_Text, BigPictureMode::Theme::TextDim);
-    const bool pressed = ImGui::Button(name.c_str());
+    const bool pressed = ImGui::Button(Tr(name));
     ImGui::PopStyleColor();
     if (pressed) {
         currentCategory = category;
@@ -515,9 +525,9 @@ void SettingsWindow::DrawMainContent(bool* open, const std::function<void()>& ap
 
     std::string centeredText;
     currentCategory == SettingsCategory::Folders
-        ? centeredText = "Folders that contain your games"
-        : centeredText = currentProfile == "Global" ? "Editing: Global settings (all games)"
-                                                    : "Editing: " + currentProfile.substr(12);
+        ? centeredText = Tr("Folders that contain your games")
+        : centeredText = currentProfile == "Global" ? Tr("Editing: Global settings (all games)")
+                                                    : Tr("Editing: ") + currentProfile.substr(12);
 
     ImGui::Dummy(ImVec2(0.0f, 2.0f * uiScale));
     ImGui::TextDisabled("%s", centeredText.c_str());
@@ -533,37 +543,39 @@ void SettingsWindow::DrawMainContent(bool* open, const std::function<void()>& ap
     ImGui::PopStyleColor();
 
     if (HasSuggested()) {
-        if (ImGui::Button("Use suggested settings")) {
+        if (ImGui::Button(Tr("Use suggested settings"))) {
             ApplySuggested();
         }
         ImGui::SameLine();
     }
 
     // Align buttons right
-    float buttonsWidth = ImGui::CalcTextSize("Save").x + ImGui::CalcTextSize("Cancel").x +
-                         ImGui::CalcTextSize("Apply").x + ImGui::GetStyle().FramePadding.x * 6.0f +
+    float buttonsWidth = ImGui::CalcTextSize(Tr("Save")).x + ImGui::CalcTextSize(Tr("Cancel")).x +
+                         ImGui::CalcTextSize(Tr("Apply")).x +
+                         ImGui::GetStyle().FramePadding.x * 6.0f +
                          ImGui::GetStyle().ItemSpacing.x * 2;
     ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - buttonsWidth);
 
     // The one action that matters stands out.
-    const bool save_clicked = BigPictureMode::Theme::AccentButton("Save");
+    const bool save_clicked = BigPictureMode::Theme::AccentButton(Tr("Save"));
     if (save_clicked) {
         closeOnSave = true;
-        ImGui::OpenPopup("Save Confirmation");
+        ImGui::OpenPopup(Tr("Save Confirmation"));
     }
 
     ImGui::SameLine();
-    if (ImGui::Button("Apply")) {
-        ImGui::OpenPopup("Save Confirmation");
+    if (ImGui::Button(Tr("Apply"))) {
+        ImGui::OpenPopup(Tr("Save Confirmation"));
     }
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("Save Confirmation", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("%s", ("Profile Saved:\n" + currentProfile).c_str());
+    if (ImGui::BeginPopupModal(Tr("Save Confirmation"), nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("%s", (Tr("Profile Saved:\n") + currentProfile).c_str());
         ImGui::Separator();
 
-        if (ImGui::Button("OK", ImVec2(250 * uiScale, 0))) {
+        if (ImGui::Button(Tr("OK"), ImVec2(250 * uiScale, 0))) {
             std::string profile = currentProfile;
             if (currentProfile != "Global") {
                 profile = currentProfile.substr(0, 9);
@@ -587,7 +599,7 @@ void SettingsWindow::DrawMainContent(bool* open, const std::function<void()>& ap
     }
 
     ImGui::SameLine();
-    if (ImGui::Button("Cancel")) {
+    if (ImGui::Button(Tr("Cancel"))) {
         DeInit();
         *open = false;
         if (applySettings) {
@@ -616,10 +628,10 @@ void SettingsWindow::DrawProfileSelector() {
     // which one is being edited.
     ImGui::Dummy(ImVec2(0.0f, 4.0f * uiScale));
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 16.0f * uiScale);
-    ImGui::TextUnformatted("Which settings do you want to change?");
+    ImGui::TextUnformatted(Tr("Which settings do you want to change?"));
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 16.0f * uiScale);
     ImGui::TextDisabled(
-        "Global applies to every game. A game with its own settings ignores Global.");
+        Tr("Global applies to every game. A game with its own settings ignores Global."));
     ImGui::Dummy(ImVec2(0.0f, 6.0f * uiScale));
 
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
@@ -656,10 +668,10 @@ void SettingsWindow::DrawProfileSelector() {
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + margin);
         const ImVec2 pos = ImGui::GetCursorScreenPos();
         const float width = ImGui::GetContentRegionAvail().x - margin;
-        const float reset_width =
-            gameConfigExists
-                ? ImGui::CalcTextSize("Remove").x + ImGui::GetStyle().FramePadding.x * 2.0f + margin
-                : 0.0f;
+        const float reset_width = gameConfigExists
+                                      ? ImGui::CalcTextSize(Tr("Remove")).x +
+                                            ImGui::GetStyle().FramePadding.x * 2.0f + margin
+                                      : 0.0f;
 
         const bool clicked =
             ImGui::InvisibleButton("card", ImVec2(width - reset_width, card_height));
@@ -673,12 +685,12 @@ void SettingsWindow::DrawProfileSelector() {
             draw_list->AddRect(pos, max, accent, rounding, 0, 2.0f * uiScale);
         }
 
-        const std::string title = is_global ? "Global settings" : profileIcons[i].title;
+        const std::string title = is_global ? Tr("Global settings") : profileIcons[i].title;
         const std::string subtitle =
             is_global
-                ? "Used by every game that has no settings of its own"
-                : profileIcons[i].serial + (gameConfigExists ? "  -  has its own settings"
-                                                             : "  -  uses the global settings");
+                ? Tr("Used by every game that has no settings of its own")
+                : profileIcons[i].serial + (gameConfigExists ? Tr("  -  has its own settings")
+                                                             : Tr("  -  uses the global settings"));
         const float text_x = pos.x + 24.0f * uiScale;
         const float text_y = pos.y + (card_height - line * 2.0f - 6.0f * uiScale) * 0.5f;
         draw_list->AddText({text_x, text_y}, text_color, title.c_str());
@@ -687,12 +699,12 @@ void SettingsWindow::DrawProfileSelector() {
         const float center_y = pos.y + card_height * 0.5f;
         float right = max.x - 18.0f * uiScale - reset_width;
         if (selected) {
-            right = pill("Editing", right, center_y, accent,
+            right = pill(Tr("Editing"), right, center_y, accent,
                          ImGui::GetColorU32(BigPictureMode::Theme::OnAccent)) -
                     8.0f * uiScale;
         }
         if (gameConfigExists) {
-            pill("Custom", right, center_y, IM_COL32(58, 58, 68, 255), text_color);
+            pill(Tr("Custom"), right, center_y, IM_COL32(58, 58, 68, 255), text_color);
         }
 
         if (gameConfigExists) {
@@ -702,12 +714,12 @@ void SettingsWindow::DrawProfileSelector() {
                 {max.x - reset_width, center_y - ImGui::GetFrameHeight() * 0.5f});
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.93f, 0.45f, 0.45f, 1.0f));
-            if (ImGui::Button("Remove")) {
+            if (ImGui::Button(Tr("Remove"))) {
                 deleteProfileIndex = i;
             }
             ImGui::PopStyleColor(2);
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Remove this game's own settings and use Global again");
+                ImGui::SetTooltip(Tr("Remove this game's own settings and use Global again"));
             }
         }
         ImGui::SetCursorScreenPos({pos.x - margin, max.y + 10.0f * uiScale});
@@ -728,16 +740,16 @@ void SettingsWindow::DrawProfileSelector() {
     }
 
     if (deleteProfileIndex != -1) {
-        ImGui::OpenPopup("Confirm Delete");
+        ImGui::OpenPopup(Tr("Confirm Delete"));
     }
 
     ImGui::PopStyleVar(3);
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("Confirm Delete", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (ImGui::BeginPopupModal(Tr("Confirm Delete"), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         const std::string title = profileIcons[deleteProfileIndex].title;
-        const std::string message =
-            "Remove the settings of " + title + "?\nThe game will use the global settings again.";
+        const std::string message = Tr("Remove the settings of ") + title +
+                                    Tr("?\nThe game will use the global settings again.");
         const std::filesystem::path path =
             Common::FS::GetUserPath(Common::FS::PathType::CustomConfigs) /
             (profileIcons[deleteProfileIndex].serial + ".json");
@@ -745,7 +757,7 @@ void SettingsWindow::DrawProfileSelector() {
         ImGui::Text("%s", message.c_str());
         ImGui::Separator();
 
-        if (ImGui::Button("OK", ImVec2(120 * uiScale, 0))) {
+        if (ImGui::Button(Tr("OK"), ImVec2(120 * uiScale, 0))) {
             try {
                 std::filesystem::remove(path);
             } catch (const std::exception& e) {
@@ -759,7 +771,7 @@ void SettingsWindow::DrawProfileSelector() {
         }
         ImGui::SameLine();
 
-        if (ImGui::Button("Cancel", ImVec2(120 * uiScale, 0))) {
+        if (ImGui::Button(Tr("Cancel"), ImVec2(120 * uiScale, 0))) {
             deleteProfileIndex = -1;
             ImGui::CloseCurrentPopup();
         }
@@ -782,12 +794,13 @@ void SettingsWindow::DrawGameFolderManager() {
     const float margin = 16.0f * uiScale;
     ImGui::Dummy(ImVec2(0.0f, 4.0f * uiScale));
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + margin);
-    ImGui::TextUnformatted("Where are your games?");
+    ImGui::TextUnformatted(Tr("Where are your games?"));
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + margin);
-    ImGui::TextDisabled("Add the folder that holds your games, with one folder per game inside.");
+    ImGui::TextDisabled(
+        Tr("Add the folder that holds your games, with one folder per game inside."));
     ImGui::Dummy(ImVec2(0.0f, 4.0f * uiScale));
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + margin);
-    if (BigPictureMode::Theme::AccentButton("Add a folder...")) {
+    if (BigPictureMode::Theme::AccentButton(Tr("Add a folder..."))) {
         if (isGameRunning) {
             open_builtin_picker = true;
         } else {
@@ -797,8 +810,8 @@ void SettingsWindow::DrawGameFolderManager() {
     ConsumeGamesFolder();
 
     if (open_builtin_picker.exchange(false)) {
-        ImGuiFileDialog::Instance()->OpenDialog("OpenFolder", "Add a folder of games", nullptr, ".",
-                                                1, nullptr,
+        ImGuiFileDialog::Instance()->OpenDialog("OpenFolder", Tr("Add a folder of games"), nullptr,
+                                                ".", 1, nullptr,
                                                 ImGuiFileDialogFlags_DisableCreateDirectoryButton |
                                                     ImGuiFileDialogFlags_DontShowHiddenFiles);
     }
@@ -831,7 +844,7 @@ void SettingsWindow::DrawGameFolderManager() {
 
         // On the right: whether the folder is used, and removing it from the list.
         const float remove_width =
-            ImGui::CalcTextSize("Remove").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+            ImGui::CalcTextSize(Tr("Remove")).x + ImGui::GetStyle().FramePadding.x * 2.0f;
         const float toggle_width = line * 1.15f * 1.85f;
         const float controls = remove_width + toggle_width + 36.0f * uiScale;
 
@@ -850,17 +863,17 @@ void SettingsWindow::DrawGameFolderManager() {
             SaveInstallDirs();
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Show the games of this folder");
+            ImGui::SetTooltip(Tr("Show the games of this folder"));
         }
         ImGui::SetCursorScreenPos({max.x - remove_width - 14.0f * uiScale, controls_y});
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.93f, 0.45f, 0.45f, 1.0f));
-        if (ImGui::Button("Remove")) {
+        if (ImGui::Button(Tr("Remove"))) {
             remove = i;
         }
         ImGui::PopStyleColor(2);
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Take this folder off the list. Nothing is deleted from disk.");
+            ImGui::SetTooltip(Tr("Take this folder off the list. Nothing is deleted from disk."));
         }
 
         ImGui::SetCursorScreenPos({pos.x - margin, max.y + 10.0f * uiScale});
@@ -873,7 +886,7 @@ void SettingsWindow::DrawGameFolderManager() {
     }
     if (m_GameInstallDirs.empty()) {
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + margin);
-        ImGui::TextDisabled("No folders yet.");
+        ImGui::TextDisabled(Tr("No folders yet."));
     }
 
     ImGui::EndChild();
@@ -894,6 +907,9 @@ void SettingsWindow::DrawSettingsTable(SettingsCategory category) {
             ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 500.0f * uiScale);
             ImGui::TableSetupColumn("Value");
 
+            if (currentProfile == "Global") {
+                AddSettingCombo("Interface Language", guiLanguageSetting, guiLanguageOptions);
+            }
             AddSettingCombo("Console Language", consoleLanguageSetting, languageOptions);
             AddSettingSliderInt("Volume", volumeSetting, 0, 500);
             AddSettingCheckbox("Show Splash Screen When Launching Game", showSplashSetting);
@@ -1013,7 +1029,7 @@ void SettingsWindow::AddSettingCheckbox(std::string name, bool& value) {
 
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.0f * uiScale);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextWrapped("%s", name.c_str());
+    ImGui::TextWrapped("%s", Tr(name));
     ImGui::TableNextColumn();
     BigPictureMode::Theme::Toggle(label.c_str(), &value, uiScale);
 }
@@ -1024,7 +1040,7 @@ void SettingsWindow::AddSettingSliderInt(std::string name, int& value, int min, 
     ImGui::TableNextColumn();
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.0f * uiScale);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextWrapped("%s", name.c_str());
+    ImGui::TextWrapped("%s", Tr(name));
 
     ImGui::TableNextColumn();
     ImGui::SliderInt(label.c_str(), &value, min, max);
@@ -1039,7 +1055,7 @@ void SettingsWindow::AddSettingSliderFloat(std::string name, float& value, int m
     ImGui::TableNextColumn();
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.0f * uiScale);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextWrapped("%s", name.c_str());
+    ImGui::TextWrapped("%s", Tr(name));
 
     ImGui::TableNextColumn();
     ImGui::SliderFloat(label.c_str(), &value, min, max, precisionString.c_str());
@@ -1052,14 +1068,14 @@ void SettingsWindow::AddSettingCombo(std::string name, int& value,
     ImGui::TableNextColumn();
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 14.0f * uiScale);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextWrapped("%s", name.c_str());
+    ImGui::TextWrapped("%s", Tr(name));
 
     ImGui::TableNextColumn();
-    const char* combo_value = options[value].c_str();
+    const char* combo_value = Tr(options[value]);
     if (ImGui::BeginCombo(label.c_str(), combo_value)) {
         for (int i = 0; i < options.size(); i++) {
             const bool selected = (i == value);
-            if (ImGui::Selectable(options[i].c_str(), selected))
+            if (ImGui::Selectable(Tr(options[i]), selected))
                 value = i;
 
             // Set the initial focus when opening the combo
