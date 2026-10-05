@@ -506,7 +506,10 @@ void SettingsWindow::DrawCategoryTabs() {
 
     ImGui::BeginChild("Categories", ImVec2(0, vertSize), child_flags, window_flags);
 
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f * uiScale, 0.0f));
+    // Narrower chips than the buttons elsewhere, so that every tab fits in the window.
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.0f * uiScale, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                        ImVec2(13.0f * uiScale, ImGui::GetStyle().FramePadding.y));
 
     // Must add categories in enum order for L1/R1 to work correctly
     if (!isGameRunning) {
@@ -525,7 +528,7 @@ void SettingsWindow::DrawCategoryTabs() {
         AddCategory("Experimental", experimentalTexture, SettingsCategory::Experimental);
     }
 
-    ImGui::PopStyleVar();
+    ImGui::PopStyleVar(2);
     ImGui::PopStyleColor();
     ImGui::EndChild();
 }

@@ -53,8 +53,8 @@ private:
         Trophy,
         Folders,
         Log,
-        Experimental,
         Patches,
+        Experimental,
     };
 
     void SaveSettings(std::string profile);

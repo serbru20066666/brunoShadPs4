@@ -34,6 +34,30 @@ Este fork está centrado en integrar mejoras gráficas, correcciones y ajustes e
 
 
 
+### El lanzador
+
+Al abrir `shadPS4.exe` sin argumentos aparece un lanzador propio, oscuro y en español o inglés. Cada juego dice a qué resolución se dibuja, cómo se muestra, si usa FSR y generación de cuadros, su idioma y cuánto se ha jugado.
+
+<img alt="Lanzador de brunoShadPs4" src="documents/Screenshots/brunoShadPs4_lanzador.png" width="800" />
+
+* **Generación de cuadros (AMD FSR 3)** integrada en el emulador, con los fps reales y los generados en el indicador.
+* **Shaders en segundos**: los shaders guardados se compilan al iniciar en todos los núcleos del procesador (en God of War III, de unos 55 s a menos de 6 s).
+* **Ajustes por juego**, con ajustes recomendados para los juegos probados y la resolución de render a elegir.
+
+<img alt="Ajustes gráficos de un juego" src="documents/Screenshots/brunoShadPs4_ajustes_graficos.png" width="800" />
+
+* **Gestor de parches**: muestra los parches instalados de cada juego, permite activarlos o apagarlos y agregar un archivo de parches.
+
+<img alt="Gestor de parches" src="documents/Screenshots/brunoShadPs4_gestor_de_parches.png" width="800" />
+
+* **Perfiles**: unos ajustes globales y, encima, los propios de cada juego.
+
+<img alt="Perfiles de ajustes" src="documents/Screenshots/brunoShadPs4_perfiles.png" width="800" />
+
+<img alt="Acerca de brunoShadPs4" src="documents/Screenshots/brunoShadPs4_acerca_de.png" width="800" />
+
+Las versiones compiladas están en [Releases](https://github.com/serbru20066666/brunoShadPs4/releases). El fork se desarrolla y se prueba en **Windows**, y sus versiones compiladas son solo para Windows.
+
 > [!IMPORTANT]
 > Este repositorio contiene principalmente el núcleo del emulador (core). Para compilarlo, es posible que necesites las dependencias de Vulkan y SDL3 configuradas adecuadamente en tu entorno.
 
