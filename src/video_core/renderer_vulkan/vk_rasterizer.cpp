@@ -915,13 +915,19 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
             continue;
         }
 
+        // A shader can declare textures it does not read on the path it takes, and games leave
+        // those descriptors unset. Whatever is in them must not reach image creation, which
+        // asserts on a tile mode or a pair of formats that does not exist (The Order: 1886's
+        // light culling shader, during its opening video).
         if (!memory->IsValidGpuMapping(tsharp.Address(), 0) ||
-            !magic_enum::enum_contains(data_fmt) || !magic_enum::enum_contains(num_fmt)) {
+            !magic_enum::enum_contains(data_fmt) || !magic_enum::enum_contains(num_fmt) ||
+            !magic_enum::enum_contains(tsharp.GetTileMode()) ||
+            !LiverpoolToVK::IsSurfaceFormatKnown(data_fmt, num_fmt)) {
             LOG_WARNING(Render_Vulkan,
                         "Rejecting invalid T# address={:#x}, pitch={}, width={}, "
-                        "data_format={}, num_format={}",
+                        "data_format={}, num_format={}, tile_mode={}",
                         tsharp.Address(), tsharp.pitch, tsharp.width, static_cast<u32>(data_fmt),
-                        static_cast<u32>(num_fmt));
+                        static_cast<u32>(num_fmt), static_cast<u32>(tsharp.GetTileMode()));
             image_bindings.emplace_back(std::piecewise_construct, std::tuple{}, std::tuple{});
             image_descriptor_array_sizes.push_back(1);
             continue;

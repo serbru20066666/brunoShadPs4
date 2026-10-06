@@ -63,6 +63,9 @@ std::span<const SurfaceFormatInfo> SurfaceFormats();
 
 vk::Format SurfaceFormat(AmdGpu::DataFormat data_format, AmdGpu::NumberFormat num_format);
 
+/// Whether SurfaceFormat has a format for the pair (it asserts when it has none).
+bool IsSurfaceFormatKnown(AmdGpu::DataFormat data_format, AmdGpu::NumberFormat num_format);
+
 struct DepthFormatInfo {
     AmdGpu::DepthBuffer::ZFormat z_format;
     AmdGpu::DepthBuffer::StencilFormat stencil_format;
