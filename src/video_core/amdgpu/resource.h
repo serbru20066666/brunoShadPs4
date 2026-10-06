@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <magic_enum/magic_enum.hpp>
 #include "common/alignment.h"
 #include "common/assert.h"
 #include "common/bit_field.h"
@@ -198,7 +199,20 @@ struct Image {
     }
 
     bool Valid() const {
-        return (type & 0x8u) != 0;
+        // A descriptor that a shader declares but does not read on the path it takes can hold
+        // anything: games leave them unset (The Order: 1886's light culling shader has a dozen).
+        // One with a field no texture has is no texture, whatever its type says: a tile mode, a
+        // format or a channel selector that does not exist, levels out of order, or a pair of
+        // formats the renderer has no format for. Left to pass, each of them aborts somewhere
+        // further on, and each different piece of garbage is another permutation of the shader.
+        return (type & 0x8u) != 0 && magic_enum::enum_contains(TileMode(tiling_index)) &&
+               magic_enum::enum_contains(DataFormat(data_format)) &&
+               magic_enum::enum_contains(NumberFormat(num_format)) &&
+               magic_enum::enum_contains(CompSwizzle(dst_sel_x)) &&
+               magic_enum::enum_contains(CompSwizzle(dst_sel_y)) &&
+               magic_enum::enum_contains(CompSwizzle(dst_sel_z)) &&
+               magic_enum::enum_contains(CompSwizzle(dst_sel_w)) && base_level <= last_level &&
+               IsKnownSurfaceFormat(GetDataFmt(), GetNumberFmt());
     }
 
     VAddr Address() const {

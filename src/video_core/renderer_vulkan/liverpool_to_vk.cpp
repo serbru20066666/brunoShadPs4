@@ -786,6 +786,14 @@ bool IsSurfaceFormatKnown(AmdGpu::DataFormat data_format, AmdGpu::NumberFormat n
            data_format == AmdGpu::DataFormat::FormatInvalid;
 }
 
+} // namespace Vulkan::LiverpoolToVK
+
+bool AmdGpu::IsKnownSurfaceFormat(DataFormat data_format, NumberFormat num_format) {
+    return Vulkan::LiverpoolToVK::IsSurfaceFormatKnown(data_format, num_format);
+}
+
+namespace Vulkan::LiverpoolToVK {
+
 vk::Format SurfaceFormat(AmdGpu::DataFormat data_format, AmdGpu::NumberFormat num_format) {
     vk::Format result = surface_format_table[GetSurfaceFormatTableIndex(data_format, num_format)];
     bool found =

@@ -546,7 +546,7 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
     return new_image_id;
 }
 
-ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
+ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt, bool only_mapped) {
     const auto& info = desc.info;
     ASSERT(info.guest_address != 0);
 
@@ -595,6 +595,16 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
     }
 
     const bool exact_match = static_cast<bool>(image_id);
+
+    // Before the image is weighed against the ones it overlaps: a descriptor of garbage can
+    // span gigabytes, and resolving its overlaps frees real images.
+    // Nor is an image of a gigabyte a texture: created, a few of them leave no memory for the rest.
+    constexpr u64 MaxTextureSize = 1ULL << 30;
+    if (!exact_match && only_mapped &&
+        (info.guest_size > MaxTextureSize ||
+         !tracker.IsGpuMapped(info.guest_address, info.guest_size))) {
+        return {};
+    }
 
     // Try to resolve overlaps (if any)
     int view_mip{-1};

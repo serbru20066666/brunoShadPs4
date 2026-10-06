@@ -104,7 +104,11 @@ public:
     std::optional<u64> ProcessDownloadImages(bool defer = false);
 
     /// Retrieves the image handle of the image with the provided attributes.
-    [[nodiscard]] ImageId FindImage(ImageDesc& desc, bool exact_fmt = false);
+    /// With `only_mapped`, no image is created over memory that is not mapped gpu memory, and
+    /// the result is then no image: a texture descriptor a shader declares but does not read can
+    /// hold anything, and one that passes for valid describes an image of any size anywhere.
+    [[nodiscard]] ImageId FindImage(ImageDesc& desc, bool exact_fmt = false,
+                                    bool only_mapped = false);
 
     /// Retrieves image whose address matches provided
     [[nodiscard]] ImageId FindImageFromRange(VAddr address, size_t size, bool ensure_valid = true);

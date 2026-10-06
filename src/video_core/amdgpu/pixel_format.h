@@ -197,6 +197,10 @@ static constexpr CompMapping IdentityMapping = {
     .a = CompSwizzle::Alpha,
 };
 
+/// Whether the renderer has a format for this pair (defined with its table of formats, in
+/// liverpool_to_vk.cpp). A pair it has none for cannot be what a texture descriptor holds.
+bool IsKnownSurfaceFormat(DataFormat data_format, NumberFormat num_format);
+
 constexpr DataFormat RemapDataFormat(const DataFormat format) {
     switch (format) {
     case DataFormat::Format11_11_10:

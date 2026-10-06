@@ -38,6 +38,9 @@ public:
     /// Unregister a range of gpu memory that was unmapped.
     void OnGpuUnmap(VAddr address, size_t size);
 
+    /// Whether the whole range is mapped gpu memory.
+    bool IsGpuMapped(VAddr addr, u64 size) const;
+
     /// Updates watches in the pages touching the specified region.
     void UpdatePageWatchers(VAddr addr, u64 size, PageOp write_op) const;
 

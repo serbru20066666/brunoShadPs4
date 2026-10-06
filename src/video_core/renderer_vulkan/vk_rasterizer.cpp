@@ -949,7 +949,18 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
                 desc.view_info.range.extent.levels = 1;
             }
 
-            image_id = texture_cache.FindImage(desc);
+            image_id = texture_cache.FindImage(desc, false, true);
+            if (!image_id) {
+                // Nothing is mapped where the descriptor says its image is: see FindImage.
+                static u32 logged = 0;
+                if (logged < 16) {
+                    logged++;
+                    LOG_WARNING(Render_Vulkan,
+                                "Rejecting T# over unmapped memory address={:#x}, size={:#x}",
+                                desc.info.guest_address, desc.info.guest_size);
+                }
+                continue;
+            }
             if (rt_sync_enabled && !image_desc.is_written) {
                 rt_sync.CopyFromLastRt(desc.info.guest_address, image_id);
             }
