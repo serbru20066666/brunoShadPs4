@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include "common/debug.h"
+#include "common/hack_features.h"
 #include "common/elf_info.h"
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
@@ -45,20 +46,22 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
       host_markers_enabled{EmulatorSettings.IsVkHostMarkersEnabled()},
       guest_markers_enabled{EmulatorSettings.IsVkGuestMarkersEnabled()},
       rt_sync{scheduler, runtime, texture_cache} {
-    // God of War III Remastered: render without host MSAA (see msaa_override.h).
+    // God of War III Remastered and The Order: 1886: render without host MSAA (see
+    // msaa_override.h).
     {
         const auto& serial = Common::ElfInfo::Instance().GameSerial();
-        AmdGpu::g_force_no_msaa = serial == "CUSA01623" || serial == "CUSA01715";
+        const bool gow3 = serial == "CUSA01623" || serial == "CUSA01715";
+        AmdGpu::g_force_no_msaa = gow3 || Common::HackFeatures::isTheOrder1886;
         // Always on for GoW3; other games can opt in with gpu.render_target_sync.
-        rt_sync_enabled = AmdGpu::g_force_no_msaa || EmulatorSettings.IsRenderTargetSyncEnabled();
+        rt_sync_enabled = gow3 || EmulatorSettings.IsRenderTargetSyncEnabled();
         if (rt_sync_enabled) {
             LOG_INFO(Render_Vulkan, "Render target alias sync enabled");
         }
         // GoW3 reads small GPU-written images on the CPU after every frame fence. Waiting for
         // the GPU at each fence serialised CPU and GPU (40 fps at 1440p with the GPU ~30% busy).
-        defer_fences = AmdGpu::g_force_no_msaa;
+        defer_fences = gow3;
         if (AmdGpu::g_force_no_msaa) {
-            LOG_INFO(Render_Vulkan, "Host MSAA disabled for {} (GoW3 depth stripes fix)", serial);
+            LOG_INFO(Render_Vulkan, "Host MSAA disabled for {} (depth stripes fix)", serial);
         }
     }
     if (!EmulatorSettings.IsNullGPU()) {
