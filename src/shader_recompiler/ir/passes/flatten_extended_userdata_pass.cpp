@@ -566,12 +566,33 @@ static bool ComputeOffset(Xbyak::CodeGenerator& c, Xbyak::Reg32 reg, PassInfo& p
     }
 }
 
+// Computes an offset as ComputeOffset does, leaving no code behind when it cannot. An offset that
+// depends on what the shader computes (an index into an array of structures, say) cannot be
+// computed by the walker, and the computation only finds out after emitting code for the operands
+// before it, which pushes and pops around them. That code ran with the stack unbalanced: the
+// walker then returned to whatever was left on the stack (The Order: 1886 crashed at the first
+// dispatch of its light culling shader).
+static bool TryComputeOffset(Xbyak::CodeGenerator& c, Xbyak::Reg32 reg, PassInfo& pass_info,
+                             const IR::Value& off_dw) {
+    const size_t start = c.getSize();
+    if (!ComputeOffset(c, reg, pass_info, off_dw)) {
+        c.setSize(start);
+        return false;
+    }
+    return true;
+}
+
 static inline bool PushPtr(Xbyak::CodeGenerator& c, PassInfo& pass_info, const IR::Value& off_dw) {
+    // Nothing is emitted for a pointer whose offset cannot be computed: its caller emits no pop.
+    const size_t start = c.getSize();
     c.push(rdi);
     if (off_dw.IsImmediate()) {
         c.mov(rdi, ptr[rdi + (off_dw.U32() << 2)]);
     } else {
-        ABORT_ON_FAILURE(ComputeOffset(c, r10d, pass_info, off_dw));
+        if (!ComputeOffset(c, r10d, pass_info, off_dw)) {
+            c.setSize(start);
+            return false;
+        }
         c.shl(r10d, 2);
         c.mov(r10d, r10d);
         c.mov(rdi, ptr[rdi + r10]);
@@ -594,7 +615,9 @@ static void VisitPointer(const IR::Value& off_dw, IR::Inst* subtree, PassInfo& p
     }
 
     if (!PushPtr(c, pass_info, off_dw)) {
-        LOG_ERROR(Render_Recompiler, "Failed to compute offset for SRT walker");
+        // What is read through this pointer is not flattened: the shader reads it from memory
+        // itself when direct memory access is enabled.
+        LOG_WARNING(Render_Recompiler, "SRT walker cannot follow a pointer at a computed offset");
         return;
     }
     PassInfo::PtrUserList* use_list = pass_info.GetUsesAsPointer(subtree);
@@ -609,8 +632,8 @@ static void VisitPointer(const IR::Value& off_dw, IR::Inst* subtree, PassInfo& p
         if (src_off_dw.IsImmediate()) {
             c.mov(r10d, ptr[rdi + (src_off_dw.U32() << 2)]);
         } else {
-            if (!ComputeOffset(c, r10d, pass_info, src_off_dw)) {
-                LOG_ERROR(Render_Recompiler, "Failed to compute offset for SRT walker");
+            if (!TryComputeOffset(c, r10d, pass_info, src_off_dw)) {
+                LOG_WARNING(Render_Recompiler, "SRT walker cannot read at a computed offset");
                 continue;
             }
             c.shl(r10d, 2);
