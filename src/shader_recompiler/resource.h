@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "common/hack_features.h"
 #include "common/types.h"
 #include "shader_recompiler/ir/type.h"
 #include "video_core/amdgpu/resource.h"
@@ -133,14 +134,15 @@ struct ImageResource {
 
     constexpr AmdGpu::Image GetSharp(const auto& info) const noexcept {
         AmdGpu::Image image{};
-        if (!Fetch(info.flattened_ud_buf.data(), &image)) {
+        if (Common::HackFeatures::IgnoresImages(info.pgm_hash) ||
+            !Fetch(info.flattened_ud_buf.data(), &image)) {
             return AmdGpu::Image::Null(is_depth);
         }
         if (post_op == SharpFetchPostOp::ConvertCubeTo2DArray) {
             image.type = u64(AmdGpu::ImageType::Color2DArray);
             image.depth = (image.depth + 1) * 6 - 1;
         }
-        if (!image.Valid()) {
+        if (!image.Valid() || (Common::HackFeatures::isTheOrder1886 && !PlausiblePitch(image))) {
             image = AmdGpu::Image::Null(is_depth);
         } else if (is_depth) {
             const auto data_fmt = image.GetDataFmt();
@@ -150,6 +152,15 @@ struct ImageResource {
             }
         }
         return image;
+    }
+
+    /// Whether a row is as wide as the texture, padded to its tiles at most. The Order: 1886
+    /// leaves the descriptors of unused light slots unset in several shaders, and what is in
+    /// them often passes for a texture but for this: a texture two texels wide with rows of
+    /// fourteen thousand, or rows narrower than the texture.
+    static constexpr bool PlausiblePitch(const AmdGpu::Image& image) {
+        const u32 width = u32(image.width) + 1;
+        return image.Pitch() >= width && image.Pitch() <= ((width + 255u) & ~255u);
     }
 
     constexpr bool Fetch(const u32* flatbuf, AmdGpu::Image* out) const {

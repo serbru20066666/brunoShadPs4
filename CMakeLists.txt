@@ -792,6 +792,8 @@ set(COMMON src/common/logging/classes.cpp
            src/common/decoder.cpp
            src/common/decoder.h
            src/common/elf_info.h
+           src/common/hack_features.cpp
+           src/common/hack_features.h
            src/common/endian.h
            src/common/enum.h
            src/common/fast_mutex.h
