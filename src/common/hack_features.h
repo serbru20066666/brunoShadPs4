@@ -27,6 +27,18 @@ public:
                (pgm_hash == 0xa7b66f58 || pgm_hash == 0xefaaab2b || pgm_hash == 0x804aeead);
     }
 
+    /// Whether a vertex or tessellation shader that samples a dozen textures with three computed
+    /// coordinates each is sampling light volumes, of which only 3D textures count. The Order:
+    /// 1886 lights its geometry per vertex from sixteen pairs of volumes; the game fills in the
+    /// pairs a draw uses and leaves the rest of the descriptors as they were, with whatever was
+    /// in that memory before: other shaders' cube maps, shadow maps and render targets, or
+    /// things that are no descriptor at all. Taken at its word, every combination of leftovers
+    /// is another permutation of the shader and a pipeline to compile, a stall of some 0.4 s
+    /// several times a second.
+    static bool HasLightVolumeSlots() {
+        return isTheOrder1886;
+    }
+
 private:
     static bool initialized;
 };

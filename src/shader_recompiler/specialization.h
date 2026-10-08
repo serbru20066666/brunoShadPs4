@@ -128,6 +128,7 @@ struct StageSpecialization {
                              spec.element_size = sharp.element_size;
                          }
                      });
+        const u32 first_image = binding;
         ForEachSharp(binding, images, info->images,
                      [&](auto& spec, const auto& desc, AmdGpu::Image sharp) {
                          spec.type = sharp.GetViewType(desc.is_array);
@@ -141,6 +142,16 @@ struct StageSpecialization {
                          spec.num_conversion = sharp.GetNumberConversion();
                          spec.num_bindings = desc.NumBindings(*info);
                      });
+        // An unset light volume is declared as a volume all the same (see
+        // SharpFetchPostOp::KeepVolumeOnly): saying so here lets the permutation compiled
+        // without it serve the draws that set it.
+        for (u32 i = 0; i < images.size(); i++) {
+            if (!bitset[first_image + i] &&
+                info->images[i].post_op == SharpFetchPostOp::KeepVolumeOnly) {
+                images[i].type = AmdGpu::ImageType::Color3D;
+                images[i].num_bindings = 1;
+            }
+        }
         ForEachSharp(binding, fmasks, info->fmasks,
                      [](auto& spec, const auto& desc, AmdGpu::Image sharp) {
                          spec.width = sharp.width;

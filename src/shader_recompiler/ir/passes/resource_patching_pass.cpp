@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <limits>
+#include "common/hack_features.h"
 #include "shader_recompiler/info.h"
 #include "shader_recompiler/ir/basic_block.h"
 #include "shader_recompiler/ir/ir_emitter.h"
@@ -226,8 +228,27 @@ void PatchBufferSharp(const ResourceDiscovery& resource, Info& info, Descriptors
     inst.SetArg(0, ir.Imm32(buffer_binding));
 }
 
+// Whether an instruction samples a texture as The Order: 1886 samples its light volumes: see
+// HackFeatures::HasLightVolumeSlots.
+static bool SamplesLightVolume(const IR::Inst& inst, const Info& info) {
+    if (!Common::HackFeatures::HasLightVolumeSlots() || info.sw_stage == SwStage::Fragment ||
+        info.sw_stage == SwStage::Compute || inst.GetOpcode() != IR::Opcode::ImageSampleRaw) {
+        return false;
+    }
+    // The coordinates are the first of the address registers when nothing precedes them.
+    const auto inst_info = inst.Flags<IR::TextureInstInfo>();
+    if (inst_info.is_array || inst_info.is_depth || inst_info.has_offset || inst_info.has_bias ||
+        inst_info.has_derivatives) {
+        return false;
+    }
+    const IR::Inst* body = inst.Arg(2).TryInst();
+    return body != nullptr && body->GetOpcode() == IR::Opcode::CompositeConstructF32x4 &&
+           !body->Arg(0).IsImmediate() && !body->Arg(1).IsImmediate() &&
+           !body->Arg(2).IsImmediate();
+}
+
 void PatchImageSharp(const ResourceDiscovery& resource, Info& info, Descriptors& descriptors,
-                     const Profile& profile) {
+                     const Profile& profile, bool light_volumes) {
     IR::Inst& inst = *resource.user;
 
     // Read image sharp.
@@ -247,6 +268,10 @@ void PatchImageSharp(const ResourceDiscovery& resource, Info& info, Descriptors&
         .is_r128 = bool(inst_info.is_r128),
         .post_op = resource.sharps[0].post_op,
     };
+    if (light_volumes && image_res.post_op == SharpFetchPostOp::None &&
+        SamplesLightVolume(inst, info)) {
+        image_res.post_op = SharpFetchPostOp::KeepVolumeOnly;
+    }
 
     auto image = image_res.GetSharp(info);
     ASSERT(image.GetType() != AmdGpu::ImageType::Invalid);
@@ -930,12 +955,19 @@ void ResourcePatchingPass(Shader::Info& info, const ResourceDiscoveryList& resou
     // Iterate over discovered resources and patch them after finding the sharp.
     // Pass 1: Track resource sharps
     Descriptors descriptors{info};
+    // Light volumes come by the dozen: a shader with a few textures sampled that way is sampling
+    // something else, and its textures are taken as they are bound.
+    constexpr size_t MinLightVolumes = 12;
+    const bool light_volumes =
+        size_t(std::ranges::count_if(resources, [&info](const auto& usage) {
+            return IsImageInstruction(*usage.user) && SamplesLightVolume(*usage.user, info);
+        })) >= MinLightVolumes;
     for (const auto& usage : resources) {
         IR::Inst& inst = *usage.user;
         if (IsBufferInstruction(inst)) {
             PatchBufferSharp(usage, info, descriptors, profile);
         } else if (IsImageInstruction(inst)) {
-            PatchImageSharp(usage, info, descriptors, profile);
+            PatchImageSharp(usage, info, descriptors, profile, light_volumes);
         }
     }
 

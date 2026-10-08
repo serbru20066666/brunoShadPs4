@@ -72,6 +72,10 @@ enum class SharpFetchPostOp : u8 {
     ForceRepeatXyzClamp,
     ForceLastTexelXyClamp,
     ClearAnisoRatioAndThreshold,
+    // For images. Last, because the pipeline cache stores these values.
+    // A light volume slot (see HackFeatures::HasLightVolumeSlots): anything in it that is not a
+    // 3D texture is an unset slot, and an unset slot is still declared as a volume.
+    KeepVolumeOnly,
 };
 
 enum class BufferType : u8 {
@@ -133,6 +137,16 @@ struct ImageResource {
     SharpFetchPostOp post_op{};
 
     constexpr AmdGpu::Image GetSharp(const auto& info) const noexcept {
+        AmdGpu::Image image = GetBoundSharp(info);
+        if (post_op == SharpFetchPostOp::KeepVolumeOnly &&
+            image.GetType() != AmdGpu::ImageType::Color3D) {
+            image = AmdGpu::Image::Null(is_depth);
+            image.type = u64(AmdGpu::ImageType::Color3D);
+        }
+        return image;
+    }
+
+    constexpr AmdGpu::Image GetBoundSharp(const auto& info) const noexcept {
         AmdGpu::Image image{};
         if (Common::HackFeatures::IgnoresImages(info.pgm_hash) ||
             !Fetch(info.flattened_ud_buf.data(), &image)) {
