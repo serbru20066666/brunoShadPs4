@@ -4,6 +4,7 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <deque>
 #include <map>
 #include <mutex>
@@ -46,7 +47,11 @@ class BufferCache {
     static constexpr u64 ARENA_PAGE_SIZE = u64{1} << ARENA_PAGE_BITS;
     static constexpr u64 NUM_ARENA_PAGES = u64{1} << (ADDRESS_SPACE_BITS - ARENA_PAGE_BITS);
     static constexpr u64 MIN_BLOCK_SIZE = 16_KB;
-    static constexpr u64 STREAM_THRESHOLD = 16_KB;
+    // Read-only ranges up to this size are copied to the stream buffer on every bind instead
+    // of being tracked and uploaded when they change. Measured in inFamous Second Son with the
+    // graphics thread saturated, against 16 KiB: 4 KiB +6.9 % draws a second, 1 KiB +10.7 %,
+    // 256 bytes +13.1 %, none at all +12.0 %.
+    static constexpr u64 STREAM_THRESHOLD = 256;
 
 public:
     explicit BufferCache(const Vulkan::Instance& instance, Vulkan::Scheduler& scheduler,
@@ -268,8 +273,13 @@ private:
     /// Guards gpu_modified_ranges, write_ticks, the readback mirror and the residency tables
     /// against guest threads.
     std::recursive_mutex direct_mutex;
-    /// Serialises direct downloads.
+    /// Direct downloads under way, by the pages they cover. Two of them must not overlap (a
+    /// second guest thread faulting on the same pages would start writing before the GPU data
+    /// has landed), but a game reads GPU-written memory from several threads at once, each its
+    /// own pages: made to take turns, each waited for the GPU wait of all the others.
     std::mutex direct_download_mutex;
+    std::condition_variable direct_download_cv;
+    boost::container::small_vector<std::pair<VAddr, VAddr>, 8> direct_downloads;
 
     u32 arena_memory_type_index{};
     u32 block_size{};

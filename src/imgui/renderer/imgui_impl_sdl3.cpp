@@ -899,6 +899,9 @@ void NewFrame(bool is_reusing_frame) {
                                  hits / window_time, (hits + misses) / window_time,
                                  static_cast<unsigned long long>(
                                      VideoCore::Perf::stream_memo_stale.exchange(0)));
+                    std::fprintf(perf_file, " | readback queue %.0f ms/s",
+                                 VideoCore::Perf::readback_queue_us.exchange(0) / 1000.0 /
+                                     window_time);
                     // The next window runs the changes named in BRUNO_AB the other way round.
                     static const bool ab = std::getenv("BRUNO_AB") != nullptr;
                     if (ab) {

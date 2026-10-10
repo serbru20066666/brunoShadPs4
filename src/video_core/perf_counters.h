@@ -41,6 +41,9 @@ inline std::atomic<u64> stream_memo_misses{};
 /// With BRUNO_MEMO_CHECK=1: times the remembered copy no longer matched guest memory.
 inline std::atomic<u64> stream_memo_stale{};
 
+/// Time guest threads spent waiting for another thread's direct readback of the same pages.
+inline std::atomic<u64> readback_queue_us{};
+
 /// Comparing a change against itself within one session: BRUNO_AB=name[,name...] names changes,
 /// and with the performance log on, every other window of the log runs with them switched off;
 /// each line of the log says which it was. A scene held still gives both figures a few seconds

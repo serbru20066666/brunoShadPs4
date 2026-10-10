@@ -415,7 +415,37 @@ bool BufferCache::DownloadMemoryDirect(VAddr device_addr, u64 size, bool on_gues
 
     // One direct download at a time: a second guest thread faulting on the same pages must not
     // start writing before the GPU data has landed.
-    std::scoped_lock download_lk{direct_download_mutex};
+    // BRUNO_AB=pardl: in the windows without, one download at a time as before.
+    static const bool ab_parallel = Perf::AbSelected("pardl");
+    VAddr busy_begin = Common::AlignDown(device_addr, 4_KB);
+    VAddr busy_end = Common::AlignUp(device_addr + size, 4_KB);
+    if (Perf::AbOff(ab_parallel)) {
+        busy_begin = 0;
+        busy_end = ~VAddr{0};
+    }
+    {
+        const auto queue_start = std::chrono::steady_clock::now();
+        std::unique_lock queue_lk{direct_download_mutex};
+        direct_download_cv.wait(queue_lk, [&] {
+            return std::ranges::none_of(direct_downloads, [&](const auto& range) {
+                return range.first < busy_end && busy_begin < range.second;
+            });
+        });
+        direct_downloads.emplace_back(busy_begin, busy_end);
+        Perf::readback_queue_us.fetch_add(std::chrono::duration_cast<std::chrono::microseconds>(
+                                              std::chrono::steady_clock::now() - queue_start)
+                                              .count(),
+                                          std::memory_order_relaxed);
+    }
+    SCOPE_EXIT {
+        {
+            std::scoped_lock queue_lk{direct_download_mutex};
+            const auto it =
+                std::ranges::find(direct_downloads, std::pair<VAddr, VAddr>{busy_begin, busy_end});
+            direct_downloads.erase(it);
+        }
+        direct_download_cv.notify_all();
+    };
     {
         std::scoped_lock lk{direct_mutex};
         boost::container::small_vector<std::pair<VAddr, VAddr>, 8> ranges;
@@ -599,8 +629,8 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
         static const bool check_memo = std::getenv("BRUNO_MEMO_CHECK") != nullptr;
         const u64 tick = scheduler.CurrentTick();
         const u64 wraps = stream_buffer.Wraps();
-        auto& memo = stream_memo[((device_addr >> 2) * 0x9E3779B97F4A7C15ULL >> 51) %
-                                 stream_memo.size()];
+        auto& memo =
+            stream_memo[((device_addr >> 2) * 0x9E3779B97F4A7C15ULL >> 51) % stream_memo.size()];
         if (memo.addr == device_addr && memo.size == size && memo.tick == tick &&
             memo.wraps == wraps && !Perf::AbOff(ab_memo)) {
             // Reading the stream buffer back is slow: the check looks at one use in 64.
