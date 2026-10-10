@@ -58,6 +58,8 @@ Probados en Windows con un i7-14700KF y una Radeon RX 6800 XT.
 
 #### The Order: 1886
 
+<img alt="The Order: 1886 en brunoShadPs4" src="documents/Screenshots/brunoShadPs4_theorder.jpg" width="800" />
+
 * Jugable desde la versión 0.24.0: entra a la partida y se mantiene en 30 fps, la velocidad original del juego.
 * Los objetos (puertas, tuberías, floreros) ya no aparecen y desaparecen en cada cuadro en tarjetas AMD.
 * Sin los tirones al moverse: la primera escena pasó de 18 a 30 fps, y el peor cuadro de 733 ms a 34 ms.
