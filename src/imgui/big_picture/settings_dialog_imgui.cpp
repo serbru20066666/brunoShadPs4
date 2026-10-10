@@ -292,6 +292,11 @@ struct Suggested {
 constexpr std::array SuggestedSettings{
     Suggested{"CUSA01623", 0, false, true, false, true, true}, // God of War III Remastered
     Suggested{"CUSA00004", 2, true, false, true, false, true}, // inFamous Second Son
+    // The Order: 1886. Without precise readbacks its command queues wait on each other for
+    // good after the menu, on a black screen.
+    Suggested{"CUSA00035", 2, true, true, false, false, false},
+    Suggested{"CUSA00076", 2, true, true, false, false, false},
+    Suggested{"CUSA00100", 2, true, true, false, false, false},
 };
 
 // The folder picked in the system's dialog. Its callback can run on another thread.
