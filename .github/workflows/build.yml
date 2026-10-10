@@ -192,8 +192,8 @@ jobs:
           ${{github.workspace}}/build/amd_fidelityfx_vk.dll
 
   macos-sdl:
-    # This fork is developed and tested on Windows only.
-    if: github.repository == 'shadps4-emu/shadPS4'
+    # This fork is developed and tested on Windows: the macOS build is built and attached as it
+    # comes out, and does not hold back the Windows one when it fails.
     runs-on: macos-26
     needs: get-info
     steps:
@@ -363,8 +363,8 @@ jobs:
   # Forks: attach the builds to a release published on the fork, or to the release named when
   # the workflow is run by hand. Upstream publishes through the pre-release job below.
   fork-release:
-    if: github.repository != 'shadps4-emu/shadPS4' && (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
-    needs: [get-info, windows-sdl]
+    if: always() && needs.windows-sdl.result == 'success' && github.repository != 'shadps4-emu/shadPS4' && (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
+    needs: [get-info, windows-sdl, macos-sdl]
     runs-on: ubuntu-latest
     permissions:
       contents: write
