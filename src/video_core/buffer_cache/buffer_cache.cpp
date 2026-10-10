@@ -599,14 +599,15 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
         static const bool check_memo = std::getenv("BRUNO_MEMO_CHECK") != nullptr;
         const u64 tick = scheduler.CurrentTick();
         const u64 wraps = stream_buffer.Wraps();
-        auto& memo = stream_memo[((device_addr >> 4) ^ (device_addr >> 13) ^ size) %
+        auto& memo = stream_memo[((device_addr >> 2) * 0x9E3779B97F4A7C15ULL >> 51) %
                                  stream_memo.size()];
         if (memo.addr == device_addr && memo.size == size && memo.tick == tick &&
             memo.wraps == wraps && !Perf::AbOff(ab_memo)) {
             // Reading the stream buffer back is slow: the check looks at one use in 64.
             const u64 hit = Perf::stream_memo_hits.fetch_add(1, std::memory_order_relaxed);
-            if (check_memo && (hit & 63) == 0 && std::memcmp(stream_buffer.mapped_data.data() + memo.offset,
-                                          reinterpret_cast<const void*>(device_addr), size) != 0) {
+            if (check_memo && (hit & 63) == 0 &&
+                std::memcmp(stream_buffer.mapped_data.data() + memo.offset,
+                            reinterpret_cast<const void*>(device_addr), size) != 0) {
                 Perf::stream_memo_stale.fetch_add(1, std::memory_order_relaxed);
             }
             return {&stream_buffer, memo.offset};
