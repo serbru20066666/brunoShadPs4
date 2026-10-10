@@ -168,6 +168,18 @@ private:
     std::unique_ptr<MemoryTracker> memory_tracker;
 
     StreamBuffer stream_buffer;
+    /// Where the last copy of a small read-only range went in the stream buffer. Draws of one
+    /// submission bind the same few ranges over and over (the constants of a pass, a material):
+    /// as long as nothing was submitted since and the stream buffer did not start over, that
+    /// copy is still there and still what the guest left for these draws.
+    struct StreamMemo {
+        VAddr addr{};
+        u32 size{};
+        u64 offset{};
+        u64 tick{};
+        u64 wraps{};
+    };
+    std::array<StreamMemo, 512> stream_memo{};
     Buffer gds_buffer;
     RangeSet gpu_modified_ranges;
 
@@ -213,7 +225,22 @@ private:
     static constexpr u32 WRITE_TICK_SHIFT = 12;
     bool pending_buffer_writes{};
     std::unordered_map<VkDeviceMemory, u8*> chunk_maps;
-    tsl::robin_map<u64, u64> write_ticks;
+    /// One table per 2 MiB of guest memory, a tick per granule and 0 where nothing was
+    /// recorded: a written range of several MiB is bound again in every submission, and that
+    /// is a thousand granules to stamp each time.
+    static constexpr u32 TICK_TABLE_SHIFT = 21 - WRITE_TICK_SHIFT;
+    static constexpr u64 TICK_TABLE_SIZE = u64{1} << TICK_TABLE_SHIFT;
+    using TickTable = std::array<u64, TICK_TABLE_SIZE>;
+    tsl::robin_map<u64, std::unique_ptr<TickTable>> write_ticks;
+    u64 last_tick_table_key{~u64{0}};
+    TickTable* last_tick_table{};
+    /// The tick recorded for a granule, 0 if none.
+    [[nodiscard]] u64 WriteTickOf(u64 granule) const {
+        const auto it = write_ticks.find(granule >> TICK_TABLE_SHIFT);
+        return it != write_ticks.end() ? (*it->second)[granule & (TICK_TABLE_SIZE - 1)] : 0;
+    }
+    /// BRUNO_AB=flatticks: what the map of granules cost, paid again in the windows without.
+    tsl::robin_map<u64, u64> write_ticks_compare;
     struct RecordedWrite {
         VAddr addr{};
         u64 size{};

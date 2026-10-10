@@ -880,7 +880,7 @@ void NewFrame(bool is_reusing_frame) {
                              "%.0f ms/s | buffer readbacks %.0f/s, guest blocked %.0f ms/s, work "
                              "%.0f ms/s, %.0f KB/s (mirror %.0f), %.0f ranges/s, copy %.0f ms/s, "
                              "write %.0f ms/s | gpu "
-                             "thread busy %.0f ms/s, %.0f draws/s\n",
+                             "thread busy %.0f ms/s, %.0f draws/s",
                              SDL_GetTicks() / 1000.0, frames / window_time, worst * 1000.0f,
                              stutters, waits / window_time, wait_us / 1000.0 / window_time,
                              readbacks / window_time, rb_call / 1000.0 / window_time,
@@ -892,6 +892,22 @@ void NewFrame(bool is_reusing_frame) {
                              static_cast<s64>(VideoCore::Perf::gpu_thread_busy_ns.exchange(0)) /
                                  1e6 / window_time,
                              VideoCore::Perf::draws.exchange(0) / window_time);
+                {
+                    const u64 hits = VideoCore::Perf::stream_memo_hits.exchange(0);
+                    const u64 misses = VideoCore::Perf::stream_memo_misses.exchange(0);
+                    std::fprintf(perf_file, " | stream memo %.0f/s of %.0f/s, stale %llu",
+                                 hits / window_time, (hits + misses) / window_time,
+                                 static_cast<unsigned long long>(
+                                     VideoCore::Perf::stream_memo_stale.exchange(0)));
+                    // The next window runs the changes named in BRUNO_AB the other way round.
+                    static const bool ab = std::getenv("BRUNO_AB") != nullptr;
+                    if (ab) {
+                        const bool was_off = VideoCore::Perf::ab_window_off.load();
+                        std::fprintf(perf_file, " | ab %s", was_off ? "off" : "on");
+                        VideoCore::Perf::ab_window_off.store(!was_off);
+                    }
+                    std::fputc(10, perf_file);
+                }
                 std::fflush(perf_file);
                 window_time = 0.0;
                 worst = 0.0f;

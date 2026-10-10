@@ -142,6 +142,12 @@ struct StreamBuffer : public Buffer {
     /// Reserves and commits a region in one step.
     std::optional<u64> Reserve(u64 size, u64 alignment = 0, bool allow_wait = true);
 
+    /// Times the buffer started over from its beginning: offsets handed out before are free
+    /// to be written again.
+    [[nodiscard]] u64 Wraps() const noexcept {
+        return wraps;
+    }
+
     /// Tick of the most recent commit into this buffer, 0 if never used.
     [[nodiscard]] u64 LastTick() const noexcept {
         return last_tick;
@@ -181,6 +187,7 @@ private:
     u64 offset{};
     u64 mapped_size{};
     u64 last_tick{};
+    u64 wraps{};
     std::vector<Watch> current_watches;
     std::size_t current_watch_cursor{};
     std::optional<size_t> invalidation_mark;

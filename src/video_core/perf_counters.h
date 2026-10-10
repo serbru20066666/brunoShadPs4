@@ -4,6 +4,8 @@
 #pragma once
 
 #include <atomic>
+#include <cstdlib>
+#include <string_view>
 #include "common/types.h"
 
 namespace VideoCore::Perf {
@@ -31,5 +33,39 @@ inline std::atomic<u64> readback_write_us{};
 /// command buffers: when that approaches the whole second, the thread is the bottleneck.
 inline std::atomic<u64> draws{};
 inline std::atomic<u64> gpu_thread_busy_ns{};
+
+/// Small read-only buffers bound from the copy an earlier draw of the same submission left in
+/// the stream buffer, and the ones that had to be copied.
+inline std::atomic<u64> stream_memo_hits{};
+inline std::atomic<u64> stream_memo_misses{};
+/// With BRUNO_MEMO_CHECK=1: times the remembered copy no longer matched guest memory.
+inline std::atomic<u64> stream_memo_stale{};
+
+/// Comparing a change against itself within one session: BRUNO_AB=name[,name...] names changes,
+/// and with the performance log on, every other window of the log runs with them switched off;
+/// each line of the log says which it was. A scene held still gives both figures a few seconds
+/// apart, which two sessions never do.
+inline std::atomic<bool> ab_window_off{};
+
+inline bool AbSelected(std::string_view name) {
+    const char* env = std::getenv("BRUNO_AB");
+    std::string_view list{env != nullptr ? env : ""};
+    while (!list.empty()) {
+        const auto comma = list.find(',');
+        if (list.substr(0, comma) == name) {
+            return true;
+        }
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        list.remove_prefix(comma + 1);
+    }
+    return false;
+}
+
+/// Whether a change named in BRUNO_AB is switched off in the current window of the log.
+inline bool AbOff(bool selected) {
+    return selected && ab_window_off.load(std::memory_order_relaxed);
+}
 
 } // namespace VideoCore::Perf

@@ -251,8 +251,27 @@ void BufferCache::RecordWriteTick(VAddr device_addr, u64 size) {
     tick_writes.emplace_back(device_addr, size);
     const u64 first = device_addr >> WRITE_TICK_SHIFT;
     const u64 last = (device_addr + size - 1) >> WRITE_TICK_SHIFT;
-    for (u64 granule = first; granule <= last; ++granule) {
-        write_ticks[granule] = tick;
+    for (u64 granule = first; granule <= last;) {
+        const u64 key = granule >> TICK_TABLE_SHIFT;
+        if (key != last_tick_table_key) {
+            auto& table = write_ticks[key];
+            if (!table) {
+                table = std::make_unique<TickTable>();
+                table->fill(0);
+            }
+            last_tick_table_key = key;
+            last_tick_table = table.get();
+        }
+        const u64 begin = granule & (TICK_TABLE_SIZE - 1);
+        const u64 end = std::min<u64>(TICK_TABLE_SIZE, begin + (last - granule) + 1);
+        std::fill(last_tick_table->begin() + begin, last_tick_table->begin() + end, tick);
+        granule += end - begin;
+    }
+    static const bool ab_flat = Perf::AbSelected("flatticks");
+    if (Perf::AbOff(ab_flat)) {
+        for (u64 granule = first; granule <= last; ++granule) {
+            write_ticks_compare[granule] = tick;
+        }
     }
 }
 
@@ -408,10 +427,10 @@ bool BufferCache::DownloadMemoryDirect(VAddr device_addr, u64 size, bool on_gues
         for (const auto& [start, end] : ranges) {
             for (u64 granule = start >> WRITE_TICK_SHIFT; granule <= (end - 1) >> WRITE_TICK_SHIFT;
                  ++granule) {
-                const auto it = write_ticks.find(granule);
+                const u64 write_tick = WriteTickOf(granule);
                 // Unknown writer: be safe and wait for everything recorded so far.
-                needed_tick = std::max(
-                    needed_tick, it != write_ticks.end() ? it->second : scheduler.CurrentTick());
+                needed_tick =
+                    std::max(needed_tick, write_tick != 0 ? write_tick : scheduler.CurrentTick());
             }
         }
         if (on_guest_thread && !ranges.empty() && needed_tick >= scheduler.CurrentTick()) {
@@ -435,9 +454,9 @@ bool BufferCache::DownloadMemoryDirect(VAddr device_addr, u64 size, bool on_gues
                 hot_granules.insert_or_assign(granule, frame);
                 Copy copy{src, piece, piece_end - piece, 0, false};
                 const auto mirror_it = mirror_copies.find(granule);
-                const auto tick_it = write_ticks.find(granule);
-                if (mirror_it != mirror_copies.end() && tick_it != write_ticks.end() &&
-                    mirror_it->second.tick == tick_it->second) {
+                const u64 write_tick = WriteTickOf(granule);
+                if (mirror_it != mirror_copies.end() && write_tick != 0 &&
+                    mirror_it->second.tick == write_tick) {
                     copy.mirror_position = mirror_it->second.position + (piece % GRANULE_SIZE);
                     copy.mirrored = true;
                 }
@@ -576,9 +595,29 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
                                                         bool is_written, bool is_texel_buffer) {
     // For read-only buffers use device local stream buffer to reduce renderpass breaks.
     if (!is_written && size <= STREAM_THRESHOLD && !IsRegionGpuModified(device_addr, size)) {
+        static const bool ab_memo = Perf::AbSelected("streammemo");
+        static const bool check_memo = std::getenv("BRUNO_MEMO_CHECK") != nullptr;
+        const u64 tick = scheduler.CurrentTick();
+        const u64 wraps = stream_buffer.Wraps();
+        auto& memo = stream_memo[((device_addr >> 4) ^ (device_addr >> 13) ^ size) %
+                                 stream_memo.size()];
+        if (memo.addr == device_addr && memo.size == size && memo.tick == tick &&
+            memo.wraps == wraps && !Perf::AbOff(ab_memo)) {
+            // Reading the stream buffer back is slow: the check looks at one use in 64.
+            const u64 hit = Perf::stream_memo_hits.fetch_add(1, std::memory_order_relaxed);
+            if (check_memo && (hit & 63) == 0 && std::memcmp(stream_buffer.mapped_data.data() + memo.offset,
+                                          reinterpret_cast<const void*>(device_addr), size) != 0) {
+                Perf::stream_memo_stale.fetch_add(1, std::memory_order_relaxed);
+            }
+            return {&stream_buffer, memo.offset};
+        }
+        Perf::stream_memo_misses.fetch_add(1, std::memory_order_relaxed);
         const auto [data, offset] = stream_buffer.Map(size, instance.UniformMinAlignment());
         memory->CopySparseMemory(device_addr, data, size);
         stream_buffer.Commit();
+        // The copy belongs to the tick it was committed in: read both again, mapping can wait
+        // for the GPU and start the buffer over.
+        memo = {device_addr, size, offset, scheduler.CurrentTick(), stream_buffer.Wraps()};
         return {&stream_buffer, offset};
     }
     const u64 first_block = device_addr >> block_shift;
