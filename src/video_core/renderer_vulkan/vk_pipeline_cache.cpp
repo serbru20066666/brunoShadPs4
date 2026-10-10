@@ -321,7 +321,11 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
                                       instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
         .needs_lds_barriers = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary ||
                               instance.GetDriverID() == vk::DriverId::eMesaKosmickrisp,
-        .needs_buffer_offsets = instance.StorageMinAlignment() > 4,
+        // A binding is aligned down to this, and the shader adds what was cut off. That is
+        // needed at an alignment of 4 as well: games bind buffers of bytes and words at any
+        // address (The Order: 1886 alternates a list of 16-bit values between an aligned
+        // address and one 2 bytes off it, and read it one element off every other frame).
+        .needs_buffer_offsets = instance.StorageMinAlignment() > 1,
         .needs_unorm_fixup = instance.GetDriverID() == vk::DriverId::eMesaKosmickrisp,
         .needs_clip_distance_emulation = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
         .supports_shader_stencil_export = instance_.IsShaderStencilExportSupported(),
