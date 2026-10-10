@@ -34,6 +34,36 @@ Este fork está centrado en integrar mejoras gráficas, correcciones y ajustes e
 
 
 
+<!-- juegos:inicio -->
+### Juegos probados
+
+Probados en Windows con un i7-14700KF y una Radeon RX 6800 XT.
+
+#### God of War III Remastered
+
+<img alt="God of War III Remastered en brunoShadPs4" src="documents/Screenshots/brunoShadPs4_gow3.jpg" width="800" />
+
+* Sin las rayas horizontales que aparecían en sombras, luces y partículas en tarjetas AMD.
+* A 1440p con el parche de resolución, FXAA y FSR, con generación de cuadros opcional.
+* La captura está tomada con **Realzar la calidad del juego** (Ajustes → Gráficos).
+* Los shaders guardados cargan en menos de 6 s al iniciar (antes, cerca de un minuto).
+
+#### inFamous Second Son
+
+<img alt="inFamous Second Son en brunoShadPs4" src="documents/Screenshots/brunoShadPs4_infamous.jpg" width="800" />
+
+* Luz correcta, y efectos de humo y de poderes que antes no se dibujaban, con las lecturas precisas de la GPU.
+* Esas lecturas hacían ir el juego a 12–20 fps; servidas desde una copia en memoria del equipo va a 30–44 fps según la zona.
+* Generación de cuadros (FSR 3): en la captura, 37 fps del juego mostrados como 76.
+
+#### The Order: 1886
+
+* Jugable desde la versión 0.24.0: entra a la partida y se mantiene en 30 fps, la velocidad original del juego.
+* Los objetos (puertas, tuberías, floreros) ya no aparecen y desaparecen en cada cuadro en tarjetas AMD.
+* Sin los tirones al moverse: la primera escena pasó de 18 a 30 fps, y el peor cuadro de 733 ms a 34 ms.
+* Necesita los ajustes recomendados del lanzador; sin las lecturas de la GPU se queda en negro tras el menú.
+<!-- juegos:fin -->
+
 ### El lanzador
 
 Al abrir `shadPS4.exe` sin argumentos aparece un lanzador propio, oscuro y en español o inglés. Cada juego dice a qué resolución se dibuja, cómo se muestra, si usa FSR y generación de cuadros, su idioma y cuánto se ha jugado.
