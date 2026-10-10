@@ -144,6 +144,7 @@ set(GCN_TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/common/logging/classes.cpp
     ${CMAKE_SOURCE_DIR}/src/common/logging/log.cpp
     ${CMAKE_SOURCE_DIR}/src/common/ntapi.cpp
+    ${CMAKE_SOURCE_DIR}/src/common/hack_features.cpp
 
     # Stubs that replace dependencies
     stubs/common_stub.cpp
@@ -153,6 +154,7 @@ set(GCN_TEST_SOURCES
     stubs/core_stub.cpp
     stubs/signals_stub.cpp
     stubs/file_sys_stub.cpp
+    stubs/video_core_stub.cpp
 
     gcn/gcn_test_runner.hpp
     gcn/gcn_test_runner.cpp
