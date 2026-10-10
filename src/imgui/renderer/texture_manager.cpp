@@ -172,6 +172,16 @@ void WorkerLoop() {
             int width, height;
             const stbi_uc* pixels =
                 stbi_load_from_memory(png_raw.data(), png_raw.size(), &width, &height, nullptr, 4);
+            if (pixels == nullptr) {
+                // An empty or damaged file (a save whose icon was cut short, for instance): the
+                // texture stays unloaded, as it does while it is being decoded.
+                LOG_ERROR(ImGui, "Failed to decode image {}: {}", path.string(),
+                          stbi_failure_reason());
+                if (core->count.fetch_sub(1) == 1) {
+                    delete core;
+                }
+                continue;
+            }
 
             auto texture = Vulkan::UploadTexture(pixels, vk::Format::eR8G8B8A8Unorm, width, height,
                                                  width * height * 4 * sizeof(stbi_uc));
