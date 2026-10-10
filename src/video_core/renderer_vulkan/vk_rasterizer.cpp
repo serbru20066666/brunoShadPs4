@@ -3,8 +3,8 @@
 
 #include <chrono>
 #include "common/debug.h"
-#include "common/hack_features.h"
 #include "common/elf_info.h"
+#include "common/hack_features.h"
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
 #include "core/memory.h"
