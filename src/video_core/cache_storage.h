@@ -28,6 +28,9 @@ public:
 
     void Open();
     void Close();
+    /// Sets the cache that is open aside (replacing the one set aside before) and opens an
+    /// empty one in its place.
+    void StartOver();
     [[nodiscard]] bool IsOpened() const {
         return opened;
     }

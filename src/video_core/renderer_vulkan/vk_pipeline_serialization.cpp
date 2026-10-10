@@ -359,11 +359,22 @@ void PipelineCache::WarmUp() {
                                            std::move(profile_data));
         return;
     }
+    // A cache made for another profile (another GPU or driver, or a version of the emulator
+    // that generated shaders differently) cannot be used. Left in place it would be ignored on
+    // every boot and nothing new would be saved either: start a new one.
+    const auto start_over = [&] {
+        Storage::DataBase::Instance().StartOver();
+        Storage::DataBase::Instance().FinishPreload();
+        std::vector<u8> new_profile(sizeof(profile));
+        std::memcpy(new_profile.data(), &profile, sizeof(profile));
+        Storage::DataBase::Instance().Save(Storage::BlobType::ShaderProfile, "profile",
+                                           std::move(new_profile));
+    };
     if (profile_data.size() != sizeof(Shader::Profile)) {
         LOG_WARNING(Render,
-                    "Pipeline cache profile has unexpected size ({} != {}). Ignoring the cache",
+                    "Pipeline cache profile has unexpected size ({} != {}). Starting a new cache",
                     profile_data.size(), sizeof(Shader::Profile));
-        Storage::DataBase::Instance().Close();
+        start_over();
         return;
     }
 
@@ -371,8 +382,8 @@ void PipelineCache::WarmUp() {
     std::memcpy(&cached_profile, profile_data.data(), sizeof(cached_profile));
     if (cached_profile != profile) {
         LOG_WARNING(Render,
-                    "Pipeline cache isn't compatible with current system. Ignoring the cache");
-        Storage::DataBase::Instance().Close();
+                    "Pipeline cache isn't compatible with current system. Starting a new cache");
+        start_over();
         return;
     }
 
