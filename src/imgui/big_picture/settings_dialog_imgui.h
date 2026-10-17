@@ -199,6 +199,9 @@ private:
         std::string author;
         std::string patch_version;
         std::string app_version;
+        /// The extra memory its note asks for ("Set Additional DMem Allocation to at least
+        /// 4000"), or 0.
+        int needed_memory{};
         bool enabled{};
     };
     std::vector<GamePatch> gamePatches;

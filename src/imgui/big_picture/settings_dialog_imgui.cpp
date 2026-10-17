@@ -291,15 +291,16 @@ struct Suggested {
     bool red_zone_patches;
     bool fxaa;
     bool frame_generation;
+    bool direct_memory_access;
 };
 constexpr std::array SuggestedSettings{
-    Suggested{"CUSA01623", 0, false, true, false, true, true}, // God of War III Remastered
-    Suggested{"CUSA00004", 2, true, false, true, false, true}, // inFamous Second Son
+    Suggested{"CUSA01623", 0, false, true, false, true, true, false}, // God of War III Remastered
+    Suggested{"CUSA00004", 2, true, false, true, false, true, true},  // inFamous Second Son
     // The Order: 1886. Without precise readbacks its command queues wait on each other for
     // good after the menu, on a black screen.
-    Suggested{"CUSA00035", 2, true, true, false, false, false},
-    Suggested{"CUSA00076", 2, true, true, false, false, false},
-    Suggested{"CUSA00100", 2, true, true, false, false, false},
+    Suggested{"CUSA00035", 2, true, true, false, false, false, true},
+    Suggested{"CUSA00076", 2, true, true, false, false, false, true},
+    Suggested{"CUSA00100", 2, true, true, false, false, false, true},
 };
 
 // The folder picked in the system's dialog. Its callback can run on another thread.
@@ -331,10 +332,13 @@ bool IsGameFolder(const std::filesystem::path& path) {
            std::filesystem::exists(path / "sce_sys" / "param.sfo", ec);
 }
 
-/// The extra memory a resolution patch needs, from the height it renders at: what the authors of
-/// the God of War III and inFamous patches ask for (2000 MiB at 1440p, 4000 at 2160p).
-int PatchMemoryFor(int height) {
-    return height >= 2160 ? 4000 : height >= 1440 ? 2000 : 0;
+/// The extra memory a patch asks for in its note ("Set Additional DMem Allocation to at least
+/// 4000", in the God of War III ones), or 0. Guessing it from the resolution gave inFamous
+/// Second Son memory it does not ask for, and the game crashed soon after starting.
+int NeededMemory(const std::string& note) {
+    static const std::regex pattern{R"(DMem[^0-9]*at least\s+(\d+))", std::regex::icase};
+    std::smatch match;
+    return std::regex_search(note, match, pattern) ? std::stoi(match[1].str()) : 0;
 }
 
 /// The height of a resolution patch ("Resolution Patch (2560x1440)", "Render resolution
@@ -381,16 +385,18 @@ void SettingsWindow::ApplySuggested() {
     windowsGuestRedZoneProtectionModeSetting = suggested->red_zone_patches;
     fxaaSetting = suggested->fxaa;
     showFpsSetting = true;
-    // The memory the game's enabled resolution patch needs: without it, God of War III at
-    // 1440p cannot allocate its video arena and closes.
+    directMemoryAccessSetting = suggested->direct_memory_access;
+    // The memory the enabled patches ask for: without it, God of War III at 1440p cannot
+    // allocate its video arena and closes.
+    int needed = 0;
     if (gamePatchSetting != 0) {
         for (const auto& patch : gamePatches) {
             if (patch.enabled) {
-                extraDmemSetting =
-                    std::max(extraDmemSetting, PatchMemoryFor(ResolutionPatchHeight(patch.name)));
+                needed = std::max(needed, patch.needed_memory);
             }
         }
     }
+    extraDmemSetting = needed;
     frameGenerationSetting = suggested->frame_generation;
     currentCategory = SettingsCategory::Graphics;
 }
@@ -490,15 +496,16 @@ void SettingsWindow::DrawQuickSettings(const std::string& serial, const std::str
         std::string label;
         int patch;
         int height;
+        int memory;
     };
-    std::vector<Resolution> resolutions{{Tr("Original of the game"), -1, 0}};
+    std::vector<Resolution> resolutions{{Tr("Original of the game"), -1, 0, 0}};
     static const std::regex size_pattern{R"((\d{3,4})\s*x\s*(\d{3,4}))"};
     for (size_t i = 0; i < gamePatches.size(); ++i) {
         std::smatch size;
         if (ResolutionPatchHeight(gamePatches[i].name) != 0 &&
             std::regex_search(gamePatches[i].name, size, size_pattern)) {
             resolutions.push_back({size[1].str() + " x " + size[2].str(), static_cast<int>(i),
-                                   std::stoi(size[2].str())});
+                                   std::stoi(size[2].str()), gamePatches[i].needed_memory});
         }
     }
     std::ranges::sort(resolutions, {}, &Resolution::height);
@@ -512,10 +519,10 @@ void SettingsWindow::DrawQuickSettings(const std::string& serial, const std::str
                 }
             }
         }
-        // The memory the enabled patch needs, also when it was enabled in its file already.
-        const int needed = PatchMemoryFor(resolutions[current].height);
-        if (extraDmemSetting < needed) {
-            extraDmemSetting = needed;
+        // The memory the chosen resolution asks for, also when its patch was enabled in its file
+        // already, and none for one that asks for nothing.
+        if (extraDmemSetting != resolutions[current].memory) {
+            extraDmemSetting = resolutions[current].memory;
             changed = true;
         }
         ImGui::AlignTextToFramePadding();
@@ -531,11 +538,8 @@ void SettingsWindow::DrawQuickSettings(const std::string& serial, const std::str
                     }
                     if (i != 0) {
                         gamePatchSetting = 1;
-                        // What their authors ask for: more of the console's memory for the
-                        // larger render targets.
-                        extraDmemSetting =
-                            std::max(extraDmemSetting, PatchMemoryFor(resolutions[i].height));
                     }
+                    extraDmemSetting = resolutions[i].memory;
                     changed = true;
                 }
             }
@@ -1299,6 +1303,7 @@ void SettingsWindow::LoadGamePatches() {
             .author = metadata.attribute("Author").value(),
             .patch_version = metadata.attribute("PatchVer").value(),
             .app_version = metadata.attribute("AppVer").value(),
+            .needed_memory = NeededMemory(metadata.attribute("Note").value()),
             .enabled = std::string_view{metadata.attribute("isEnabled").value()} == "true",
         });
     }
