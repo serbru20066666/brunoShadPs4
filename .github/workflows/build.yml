@@ -395,6 +395,38 @@ jobs:
         RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
       run: gh release upload "$RELEASE_TAG" ./artifacts/*.zip --clobber --repo "${{ github.repository }}"
 
+  # Forks: one package per game (the executable named after the game, which opens that game's
+  # own launcher), attached to the same release. On Windows: the icon and the properties of the
+  # executable are set through its resource API.
+  game-packages:
+    if: always() && needs.windows-sdl.result == 'success' && github.repository != 'shadps4-emu/shadPS4' && (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
+    needs: [get-info, windows-sdl]
+    runs-on: windows-2025-vs2026
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Download the Windows build
+      uses: actions/download-artifact@v8
+      with:
+        pattern: shadps4-win64-sdl-*
+        merge-multiple: true
+        path: ./windows-build
+
+    - name: Build the packages
+      shell: powershell
+      env:
+        RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+      run: ./scripts/empaquetar_juegos.ps1 -Origen ./windows-build -Destino ./paquetes -Version $env:RELEASE_TAG
+
+    - name: Attach the packages to the release
+      shell: powershell
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+      run: gh release upload $env:RELEASE_TAG (Get-ChildItem ./paquetes/*.zip).FullName --clobber --repo "${{ github.repository }}"
+
   pre-release:
     if: github.ref == 'refs/heads/main' && github.repository == 'shadps4-emu/shadPS4' && github.event_name == 'push'
     needs: [get-info, windows-sdl, macos-sdl, linux-sdl]
