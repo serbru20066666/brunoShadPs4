@@ -347,6 +347,20 @@ void PipelineCache::WarmUp() {
 
     Storage::DataBase::Instance().Open();
 
+    // Binaries are named "<program hash>_<permutation index>": new permutations take indices
+    // past all of these, whether or not their pipelines can be loaded.
+    Storage::DataBase::Instance().ForEachBlobName(
+        Storage::BlobType::ShaderBinary, [this](const std::string& name) {
+            const auto separator = name.find('_');
+            if (separator == std::string::npos) {
+                return;
+            }
+            const u64 pgm_hash = std::strtoull(name.substr(0, separator).c_str(), nullptr, 16);
+            const size_t index = std::strtoull(name.substr(separator + 1).c_str(), nullptr, 10);
+            auto& next = next_perm_idx[pgm_hash];
+            next = std::max(next, index + 1);
+        });
+
     // Check if cache is compatible
     std::vector<u8> profile_data{};
     Storage::DataBase::Instance().Load(Storage::BlobType::ShaderProfile, "profile", profile_data);

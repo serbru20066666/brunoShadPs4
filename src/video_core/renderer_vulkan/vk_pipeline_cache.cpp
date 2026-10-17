@@ -1,13 +1,16 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <chrono>
 #include <ranges>
 
 #include "common/elf_info.h"
+#include "common/hack_features.h"
 #include "common/hash.h"
 #include "common/io_file.h"
 #include "common/path_util.h"
+#include "common/thread.h"
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
@@ -16,6 +19,7 @@
 #include "shader_recompiler/runtime_info.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/cache_storage.h"
+#include "video_core/perf_counters.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_serialization.h"
@@ -369,10 +373,110 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
                  std::chrono::steady_clock::now() - warm_up_start)
                  .count());
     SaveDriverCache();
+
+    // Only where it is known to be safe: a skipped draw leaves its output unwritten for a few
+    // frames. The Order: 1886 only shows it as objects appearing late. inFamous Second Son reads
+    // what the GPU computed back into the game, which then crashed or hung the GPU while
+    // loading. BRUNO_ASYNC_PIPELINES=1 or 0 overrides it for any game.
+    const char* async_env = std::getenv("BRUNO_ASYNC_PIPELINES");
+    async_pipelines = async_env ? async_env[0] == '1' : Common::HackFeatures::isTheOrder1886;
+    if (async_pipelines) {
+        // The driver builds pipelines in parallel well; a few workers absorb the bursts of a
+        // new area (250 pipelines at once) without taking the cores the game threads use.
+        const u32 count = std::clamp(std::thread::hardware_concurrency() / 4, 2u, 6u);
+        for (u32 i = 0; i < count; ++i) {
+            build_workers.emplace_back([this](std::stop_token stop) { BuildWorker(stop); });
+        }
+        LOG_INFO(Render_Vulkan, "Building new graphics pipelines on {} worker threads", count);
+    }
 }
 
 PipelineCache::~PipelineCache() {
+    for (auto& worker : build_workers) {
+        worker.request_stop();
+    }
+    build_cv.notify_all();
+    build_workers.clear();
     SaveDriverCache();
+}
+
+void PipelineCache::BuildWorker(std::stop_token stop) {
+    Common::SetCurrentThreadName("shadPS4:PipelineBuilder");
+    while (true) {
+        std::function<void()> job;
+        {
+            std::unique_lock lock{build_mutex};
+            if (!build_cv.wait(lock, stop, [this] { return !build_queue.empty(); })) {
+                return;
+            }
+            job = std::move(build_queue.front());
+            build_queue.pop_front();
+        }
+        job();
+    }
+}
+
+size_t PipelineCache::ClaimPermutationIndex(u64 pgm_hash, size_t at_least) {
+    auto& next = next_perm_idx[pgm_hash];
+    const size_t index = std::max(next, at_least);
+    next = index + 1;
+    return index;
+}
+
+void PipelineCache::QueueGraphicsPipeline(u64 hash) {
+    auto pending = std::make_unique<PendingGraphicsPipeline>();
+    auto* p = pending.get();
+    for (u32 i = 0; i < MaxShaderStages; ++i) {
+        if (infos[i]) {
+            p->info_copies[i].emplace(*infos[i]);
+        }
+    }
+    p->runtime_infos = runtime_infos;
+    if (fetch_shader) {
+        p->fetch_shader = *fetch_shader;
+    }
+    p->modules = modules;
+    p->hash = hash;
+    {
+        std::scoped_lock lock{build_mutex};
+        build_queue.emplace_back([this, p, key = graphics_key] {
+            std::array<const Shader::Info*, MaxShaderStages> stage_infos{};
+            for (u32 i = 0; i < MaxShaderStages; ++i) {
+                stage_infos[i] = p->info_copies[i] ? &*p->info_copies[i] : nullptr;
+            }
+            {
+                ++VideoCore::Perf::pipelines_built;
+                VideoCore::Perf::ScopedMicros timer{VideoCore::Perf::pipeline_build_us};
+                p->pipeline = std::make_unique<GraphicsPipeline>(
+                    instance, scheduler, desc_heap, profile, key, *pipeline_cache, stage_infos,
+                    p->runtime_infos, p->fetch_shader ? &*p->fetch_shader : nullptr, p->modules,
+                    p->sdata, false);
+            }
+            p->done.store(true, std::memory_order_release);
+        });
+    }
+    pending_graphics.emplace(graphics_key, std::move(pending));
+    build_cv.notify_one();
+}
+
+void PipelineCache::OnGraphicsPipelineReady(const GraphicsPipelineKey& key, u64 hash,
+                                            GraphicsPipeline::SerializationSupport& sdata) {
+    // Keep the driver's cache on disk reasonably fresh: the emulator is often closed
+    // without a chance to write it.
+    if (++unsaved_pipelines >= 48) {
+        SaveDriverCache();
+    }
+    RegisterPipelineData(key, hash, sdata);
+    ++num_new_pipelines;
+
+    if (EmulatorSettings.IsShaderCollect()) {
+        for (auto stage = 0; stage < MaxShaderStages; ++stage) {
+            if (infos[stage]) {
+                auto& m = modules[stage];
+                module_related_pipelines[m].emplace_back(key);
+            }
+        }
+    }
 }
 
 std::filesystem::path PipelineCache::DriverCachePath() {
@@ -385,6 +489,8 @@ void PipelineCache::SaveDriverCache() {
     if (!EmulatorSettings.IsPipelineCacheEnabled() || !pipeline_cache) {
         return;
     }
+    ++VideoCore::Perf::driver_cache_saves;
+    VideoCore::Perf::ScopedMicros timer{VideoCore::Perf::driver_cache_save_us};
     const auto [result, data] = instance.GetDevice().getPipelineCacheData(*pipeline_cache);
     if (result != vk::Result::eSuccess || data.empty()) {
         return;
@@ -413,28 +519,35 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
     if (is_new) {
         const auto pipeline_hash = std::hash<GraphicsPipelineKey>{}(graphics_key);
         LOG_INFO(Render_Vulkan, "Compiling graphics pipeline {:#x}", pipeline_hash);
-        // Keep the driver's cache on disk reasonably fresh: the emulator is often closed
-        // without a chance to write it.
-        if (++unsaved_pipelines >= 48) {
-            SaveDriverCache();
+        if (async_pipelines) {
+            QueueGraphicsPipeline(pipeline_hash);
+            ++VideoCore::Perf::draws_waiting_pipeline;
+            return nullptr;
         }
 
         GraphicsPipeline::SerializationSupport sdata{};
-        it.value() = std::make_unique<GraphicsPipeline>(
-            instance, scheduler, desc_heap, profile, graphics_key, *pipeline_cache, infos,
-            runtime_infos, fetch_shader, modules, sdata, false);
-
-        RegisterPipelineData(graphics_key, pipeline_hash, sdata);
-        ++num_new_pipelines;
-
-        if (EmulatorSettings.IsShaderCollect()) {
-            for (auto stage = 0; stage < MaxShaderStages; ++stage) {
-                if (infos[stage]) {
-                    auto& m = modules[stage];
-                    module_related_pipelines[m].emplace_back(graphics_key);
-                }
-            }
+        {
+            ++VideoCore::Perf::pipelines_built;
+            VideoCore::Perf::ScopedMicros timer{VideoCore::Perf::pipeline_build_us};
+            it.value() = std::make_unique<GraphicsPipeline>(
+                instance, scheduler, desc_heap, profile, graphics_key, *pipeline_cache, infos,
+                runtime_infos, fetch_shader, modules, sdata, false);
         }
+        OnGraphicsPipelineReady(graphics_key, pipeline_hash, sdata);
+    } else if (!it->second) {
+        // Still being built on a worker: skip this draw.
+        const auto pending = pending_graphics.find(graphics_key);
+        if (pending == pending_graphics.end() ||
+            !pending->second->done.load(std::memory_order_acquire)) {
+            ++VideoCore::Perf::draws_waiting_pipeline;
+            return nullptr;
+        }
+        auto& ready = *pending->second;
+        // Built from copies of the shader infos: point it at the live ones.
+        ready.pipeline->SetStages(infos);
+        it.value() = std::move(ready.pipeline);
+        OnGraphicsPipelineReady(graphics_key, ready.hash, ready.sdata);
+        pending_graphics.erase(pending);
     }
     return it->second.get();
 }
@@ -449,6 +562,8 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
         LOG_INFO(Render_Vulkan, "Compiling compute pipeline {:#x}", pipeline_hash);
 
         ComputePipeline::SerializationSupport sdata{};
+        ++VideoCore::Perf::pipelines_built;
+        VideoCore::Perf::ScopedMicros timer{VideoCore::Perf::pipeline_build_us};
         it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
                                                        *pipeline_cache, compute_key, *infos[0],
                                                        modules[0], sdata, false);
@@ -698,6 +813,8 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
     LOG_INFO(Render_Vulkan, "Compiling {} shader {:#x} {}", info.hw_stage, info.pgm_hash,
              perm_idx != 0 ? "(permutation)" : "");
     DumpShader(code, info.pgm_hash, info.hw_stage, perm_idx, "bin");
+    ++VideoCore::Perf::modules_built;
+    VideoCore::Perf::ScopedMicros timer{VideoCore::Perf::module_build_us};
 
     const auto ir_program = Shader::TranslateProgram(code, pools, info, runtime_info, profile);
     auto spv = Shader::Backend::SPIRV::EmitSPIRV(profile, runtime_info, ir_program, binding);
@@ -734,13 +851,15 @@ PipelineCache::Result PipelineCache::GetProgram(HwStage hw_stage, SwStage sw_sta
         it_pgm.value() = std::make_unique<Program>(hw_stage, sw_stage, params);
         auto& program = it_pgm.value();
         auto start = binding;
-        const auto module = CompileModule(program->info, runtime_info, params.code, 0, binding);
+        const size_t first_idx = ClaimPermutationIndex(params.hash, 0);
+        const auto module =
+            CompileModule(program->info, runtime_info, params.code, first_idx, binding);
         auto spec = Shader::StageSpecialization(program->info, runtime_info, profile, start);
-        const auto perm_hash = HashCombine(params.hash, 0);
+        const auto perm_hash = HashCombine(params.hash, first_idx);
 
-        RegisterShaderMeta(program->info, spec.fetch_shader_data, spec, perm_hash, 0);
-        program->AddPermut(module, std::move(spec));
-        if (auto& fetch = program->modules[0].spec.fetch_shader_data; !fetch.Empty()) {
+        RegisterShaderMeta(program->info, spec.fetch_shader_data, spec, perm_hash, first_idx);
+        program->InsertPermut(module, std::move(spec), first_idx);
+        if (auto& fetch = program->modules[first_idx].spec.fetch_shader_data; !fetch.Empty()) {
             fetch_shader = &fetch;
         }
         return std::make_tuple(&program->info, module, perm_hash);
@@ -754,17 +873,19 @@ PipelineCache::Result PipelineCache::GetProgram(HwStage hw_stage, SwStage sw_sta
     auto spec = Shader::StageSpecialization(info, runtime_info, profile, binding);
 
     size_t perm_idx = program->modules.size();
-    u64 perm_hash = HashCombine(params.hash, perm_idx);
+    u64 perm_hash{};
 
     vk::ShaderModule module{};
 
     const auto it = std::ranges::find(program->modules, spec, &Program::Module::spec);
     if (it == program->modules.end()) {
+        perm_idx = ClaimPermutationIndex(params.hash, program->modules.size());
+        perm_hash = HashCombine(params.hash, perm_idx);
         auto new_info = Shader::Info(hw_stage, sw_stage, params);
         module = CompileModule(new_info, runtime_info, params.code, perm_idx, binding);
 
         RegisterShaderMeta(info, spec.fetch_shader_data, spec, perm_hash, perm_idx);
-        program->AddPermut(module, std::move(spec));
+        program->InsertPermut(module, std::move(spec), perm_idx);
     } else {
         info.AddBindings(binding);
         module = it->module;

@@ -3,7 +3,14 @@
 
 #pragma once
 
+#include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <filesystem>
+#include <functional>
+#include <mutex>
+#include <optional>
+#include <thread>
 #include <variant>
 #include <tsl/robin_map.h>
 #include "shader_recompiler/profile.h"
@@ -129,6 +136,27 @@ private:
     void SaveDriverCache();
     static std::filesystem::path DriverCachePath();
 
+    /// A graphics pipeline being built on a worker thread, from copies of what the draw that
+    /// needed it had (the shader infos hold that draw's resource descriptors).
+    struct PendingGraphicsPipeline {
+        std::array<std::optional<Shader::Info>, MaxShaderStages> info_copies;
+        std::array<Shader::RuntimeInfo, MaxShaderStages> runtime_infos{};
+        std::optional<Shader::Gcn::FetchShaderData> fetch_shader;
+        std::array<vk::ShaderModule, MaxShaderStages> modules{};
+        u64 hash{};
+        GraphicsPipeline::SerializationSupport sdata{};
+        std::unique_ptr<GraphicsPipeline> pipeline;
+        std::atomic<bool> done{};
+    };
+    /// Index for a new permutation of the program: past every index already used in the store,
+    /// so that a binary is never overwritten with a different variant (see next_perm_idx).
+    size_t ClaimPermutationIndex(u64 pgm_hash, size_t at_least);
+    void QueueGraphicsPipeline(u64 hash);
+    /// Bookkeeping for a graphics pipeline that has just become usable.
+    void OnGraphicsPipelineReady(const GraphicsPipelineKey& key, u64 hash,
+                                 GraphicsPipeline::SerializationSupport& sdata);
+    void BuildWorker(std::stop_token stop);
+
     vk::UniquePipelineCache pipeline_cache;
     /// Pipelines compiled since the driver's cache was last written.
     u32 unsaved_pipelines{};
@@ -146,6 +174,22 @@ private:
     GraphicsPipelineKey graphics_key{};
     ComputePipelineKey compute_key{};
     u32 num_new_pipelines{}; // new pipelines added to the cache since the game start
+
+    /// New graphics pipelines are built on worker threads and the draws that need one are
+    /// skipped until it is ready, for the games where that is safe (BRUNO_ASYNC_PIPELINES=1 or 0
+    /// overrides it). Otherwise they are built on the GPU thread, which waits ~60 ms for each:
+    /// whole seconds when a new area loads.
+    bool async_pipelines{};
+    /// Per program, the first permutation index not used by any binary in the store. Indices
+    /// used to restart from the permutations a session had loaded, and a new variant could take
+    /// the index of one that was not loaded: its binary was replaced, and a pipeline saved
+    /// earlier then loaded the other variant on the next boot.
+    tsl::robin_map<u64, size_t> next_perm_idx;
+    tsl::robin_map<GraphicsPipelineKey, std::unique_ptr<PendingGraphicsPipeline>> pending_graphics;
+    std::mutex build_mutex;
+    std::condition_variable_any build_cv;
+    std::deque<std::function<void()>> build_queue;
+    std::vector<std::jthread> build_workers;
 
     // Only if Config::collectShadersForDebug()
     tsl::robin_map<vk::ShaderModule,

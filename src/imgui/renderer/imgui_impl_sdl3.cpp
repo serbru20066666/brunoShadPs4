@@ -902,6 +902,21 @@ void NewFrame(bool is_reusing_frame) {
                     std::fprintf(perf_file, " | readback queue %.0f ms/s",
                                  VideoCore::Perf::readback_queue_us.exchange(0) / 1000.0 /
                                      window_time);
+                    std::fprintf(perf_file,
+                                 " | built %llu pipelines %.0f ms, %llu modules %.0f ms, %llu driver "
+                                 "cache saves %.0f ms",
+                                 static_cast<unsigned long long>(
+                                     VideoCore::Perf::pipelines_built.exchange(0)),
+                                 VideoCore::Perf::pipeline_build_us.exchange(0) / 1000.0,
+                                 static_cast<unsigned long long>(
+                                     VideoCore::Perf::modules_built.exchange(0)),
+                                 VideoCore::Perf::module_build_us.exchange(0) / 1000.0,
+                                 static_cast<unsigned long long>(
+                                     VideoCore::Perf::driver_cache_saves.exchange(0)),
+                                 VideoCore::Perf::driver_cache_save_us.exchange(0) / 1000.0);
+                    std::fprintf(perf_file, " | draws waiting for a pipeline %llu",
+                                 static_cast<unsigned long long>(
+                                     VideoCore::Perf::draws_waiting_pipeline.exchange(0)));
                     // The next window runs the changes named in BRUNO_AB the other way round.
                     static const bool ab = std::getenv("BRUNO_AB") != nullptr;
                     if (ab) {

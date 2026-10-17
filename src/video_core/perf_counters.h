@@ -4,6 +4,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <string_view>
 #include "common/types.h"
@@ -40,6 +41,28 @@ inline std::atomic<u64> stream_memo_hits{};
 inline std::atomic<u64> stream_memo_misses{};
 /// With BRUNO_MEMO_CHECK=1: times the remembered copy no longer matched guest memory.
 inline std::atomic<u64> stream_memo_stale{};
+
+/// Pipelines and shader modules created while playing, and the time the GPU thread spent on them
+/// (each one stalls the frame), plus the driver cache saves done meanwhile.
+inline std::atomic<u64> pipelines_built{};
+inline std::atomic<u64> pipeline_build_us{};
+inline std::atomic<u64> modules_built{};
+inline std::atomic<u64> module_build_us{};
+inline std::atomic<u64> driver_cache_saves{};
+/// Draws skipped because their new pipeline was still being built on a worker thread.
+inline std::atomic<u64> draws_waiting_pipeline{};
+inline std::atomic<u64> driver_cache_save_us{};
+
+/// Adds the time since construction to a counter.
+struct ScopedMicros {
+    std::atomic<u64>& counter;
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    ~ScopedMicros() {
+        counter += std::chrono::duration_cast<std::chrono::microseconds>(
+                       std::chrono::steady_clock::now() - start)
+                       .count();
+    }
+};
 
 /// Time guest threads spent waiting for another thread's direct readback of the same pages.
 inline std::atomic<u64> readback_queue_us{};

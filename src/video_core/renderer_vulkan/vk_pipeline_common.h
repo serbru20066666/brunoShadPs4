@@ -57,6 +57,12 @@ public:
         return is_compute;
     }
 
+    /// Points the pipeline at these shader infos. A pipeline built on a worker thread is built
+    /// from copies of them, and draws have to read the live ones.
+    void SetStages(std::span<const Shader::Info* const> infos) {
+        std::ranges::copy(infos, stages.begin());
+    }
+
     using DescriptorWrites = std::vector<vk::WriteDescriptorSet>;
     void BindResources(DescriptorWrites& set_writes, const Shader::PushData& push_data) const;
 
