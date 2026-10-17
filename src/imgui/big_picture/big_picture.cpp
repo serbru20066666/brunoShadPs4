@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 #include <stb_image.h>
 
+#include "common/game_edition.h"
 #include "common/logging/log.h"
 #include "common/path_util.h"
 #include "common/scm_rev.h"
@@ -45,6 +46,212 @@ float uiScale = 1.0f;
 SDL_Renderer* renderer;
 
 namespace {
+
+/// A game's own launcher: a juego.ini next to the executable names the game, and the launcher
+/// then shows only that game, its main settings and its recommended ones. Lines:
+///   title=The Order: 1886
+///   serials=CUSA00076,CUSA00035,CUSA00100
+struct SingleGame {
+    bool active{};
+    std::string title;
+    std::vector<std::string> serials;
+    /// The folder of the executable, where a fondo.jpg or fondo.png can set the background.
+    std::filesystem::path folder;
+    /// The picture behind the launcher: fondo.jpg/png next to the executable, or else the
+    /// game's own art (sce_sys/pic1.png). Nothing is shipped with the launcher.
+    SDL_Texture* background{};
+    bool background_searched{};
+};
+SingleGame single_game;
+
+void LoadSingleGame(const char* executable_name) {
+    const auto& edition = Common::LoadGameEdition(executable_name);
+    single_game.active = edition.active;
+    single_game.title = edition.title;
+    single_game.serials = edition.serials;
+    single_game.folder = edition.folder;
+}
+
+/// The window's icon in a game's own launcher: an icono.png next to the executable, or else
+/// the game's own icon.
+void SetSingleGameIcon(SDL_Window* window, const std::vector<IconInfo>& icons) {
+    std::vector<std::filesystem::path> candidates{single_game.folder / "icono.png"};
+    if (!icons.empty()) {
+        candidates.push_back(icons[0].ebootPath.parent_path() / "sce_sys" / "icon0.png");
+    }
+    std::error_code ec;
+    for (const auto& candidate : candidates) {
+        if (!std::filesystem::exists(candidate, ec)) {
+            continue;
+        }
+        std::ifstream file{candidate, std::ios::binary};
+        std::vector<u8> png{std::istreambuf_iterator<char>(file), {}};
+        if (!png.empty()) {
+            Frontend::SetWindowIcon(window, png);
+            return;
+        }
+    }
+}
+
+/// Finds the background picture once the game is known (its own art is in its folder).
+void FindBackground(const std::vector<IconInfo>& icons) {
+    if (!single_game.active || single_game.background_searched) {
+        return;
+    }
+    std::vector<std::filesystem::path> candidates;
+    for (const char* name : {"fondo.jpg", "fondo.jpeg", "fondo.png"}) {
+        candidates.push_back(single_game.folder / name);
+    }
+    if (!icons.empty()) {
+        const auto game_folder = icons[0].ebootPath.parent_path();
+        candidates.push_back(game_folder / "sce_sys" / "pic1.png");
+        candidates.push_back(game_folder / "sce_sys" / "pic0.png");
+    }
+    std::error_code ec;
+    for (const auto& candidate : candidates) {
+        if (std::filesystem::exists(candidate, ec)) {
+            single_game.background = LoadSdlTextureDataFromFile(candidate);
+            if (single_game.background) {
+                break;
+            }
+        }
+    }
+    // Without the game, its art may still come once its folder is chosen.
+    single_game.background_searched = single_game.background != nullptr || !icons.empty();
+}
+
+/// Draws the game's picture in a rounded rectangle, filling it without stretching, and darkens
+/// its left part, where the name and the play button go.
+void DrawBanner(ImDrawList* draw_list, ImVec2 min, ImVec2 max, float rounding) {
+    draw_list->AddRectFilled(min, max, ImGui::GetColorU32(Theme::Card), rounding);
+    if (!single_game.background) {
+        return;
+    }
+    float width{}, height{};
+    SDL_GetTextureSize(single_game.background, &width, &height);
+    const ImVec2 size{max.x - min.x, max.y - min.y};
+    if (width <= 0.0f || height <= 0.0f || size.x <= 0.0f || size.y <= 0.0f) {
+        return;
+    }
+    const float scale = std::max(size.x / width, size.y / height);
+    const float u = size.x / (width * scale);
+    const float v = size.y / (height * scale);
+    // Anchored to the right, where the picture shows through.
+    const ImVec2 uv0{1.0f - u, (1.0f - v) * 0.5f};
+    const ImVec2 uv1{1.0f, uv0.y + v};
+    draw_list->AddImageRounded(ImTextureID(single_game.background), min, max, uv0, uv1,
+                               IM_COL32_WHITE, rounding);
+    const ImU32 dark = ImGui::GetColorU32(ImVec4(Theme::Card.x, Theme::Card.y, Theme::Card.z, 0.92f));
+    const ImU32 clear = ImGui::GetColorU32(ImVec4(Theme::Card.x, Theme::Card.y, Theme::Card.z, 0.0f));
+    const float solid = min.x + rounding * 2.0f;
+    draw_list->AddRectFilled(min, {solid, max.y}, dark, rounding, ImDrawFlags_RoundCornersLeft);
+    draw_list->AddRectFilledMultiColor({solid, min.y}, {min.x + size.x * 0.66f, max.y}, dark, clear,
+                                       clear, dark);
+}
+
+/// A game's own launcher: a banner with the game's picture, its name and the play button, and
+/// under it two panels, its main settings and how it is set up.
+void DrawSingleGame(ImGuiEmuSettings::SettingsWindow& settings, bool show_settings) {
+    const IconInfo& game = gameIcons[0];
+    const float s = uiScale;
+    const float width = ImGui::GetContentRegionAvail().x;
+    const float banner_height = std::max(220.0f * s, ImGui::GetContentRegionAvail().y * 0.38f);
+    const float rounding = 26.0f * s;
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    // The banner goes behind its contents and grows to hold them: draw them first.
+    ImDrawListSplitter splitter;
+    splitter.Split(draw_list, 2);
+    splitter.SetCurrentChannel(draw_list, 1);
+
+    // The version, as a small pill, then the name and the actions.
+    const float left = min.x + 44.0f * s;
+    ImGui::SetCursorScreenPos({left, min.y + 36.0f * s});
+    ImGui::BeginGroup();
+    {
+        const char* badge = "PlayStation 4";
+        ImGui::SetWindowFontScale(s * 0.8f);
+        const ImVec2 text = ImGui::CalcTextSize(badge);
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        const ImVec2 pad{10.0f * s, 4.0f * s};
+        draw_list->AddRectFilled(at, {at.x + text.x + pad.x * 2.0f, at.y + text.y + pad.y * 2.0f},
+                                 ImGui::GetColorU32(Theme::Accent), 100.0f);
+        ImGui::SetCursorScreenPos({at.x + pad.x, at.y + pad.y});
+        ImGui::PushStyleColor(ImGuiCol_Text, Theme::OnAccent);
+        ImGui::TextUnformatted(badge);
+        ImGui::PopStyleColor();
+        ImGui::SetCursorScreenPos({at.x, at.y + text.y + pad.y * 2.0f});
+        ImGui::SetWindowFontScale(s);
+    }
+    ImGui::Dummy(ImVec2(0.0f, 10.0f * s));
+    ImGui::SetWindowFontScale(s * 2.0f);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width * 0.5f);
+    ImGui::TextUnformatted(game.title.c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::SetWindowFontScale(s);
+    ImGui::TextDisabled("%s", fmt::format("{}   {}", game.serial, game.details[0]).c_str());
+    ImGui::Dummy(ImVec2(0.0f, 14.0f * s));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(40.0f * s, 15.0f * s));
+    ImGui::SetWindowFontScale(s * 1.15f);
+    const bool play = Theme::AccentButton(Tr("Play"));
+    ImGui::SetWindowFontScale(s);
+    ImGui::PopStyleVar();
+    ImGui::EndGroup();
+    const ImVec2 max{min.x + width,
+                     std::max(min.y + banner_height, ImGui::GetItemRectMax().y + 40.0f * s)};
+    splitter.SetCurrentChannel(draw_list, 0);
+    DrawBanner(draw_list, min, max, rounding);
+    splitter.Merge(draw_list);
+
+    // The two panels fill what is left.
+    ImGui::SetCursorScreenPos({min.x, max.y + 22.0f * s});
+    const float gap = 22.0f * s;
+    const float panel_width = (width - gap) * 0.5f;
+    const float panel_height = std::max(ImGui::GetContentRegionAvail().y, 200.0f * s);
+    const ImGuiChildFlags panel_flags =
+        ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened;
+    ImGui::BeginChild("MainSettings", ImVec2(panel_width, panel_height), panel_flags);
+    ImGui::SetWindowFontScale(s * 1.15f);
+    ImGui::TextUnformatted(Tr("Main settings"));
+    ImGui::SetWindowFontScale(s);
+    ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
+    if (show_settings) {
+        settings.ResetQuickSettings();
+    } else {
+        settings.DrawQuickSettings(game.serial, game.title);
+    }
+    ImGui::EndChild();
+    ImGui::SameLine(0.0f, gap);
+    ImGui::BeginChild("GameInfo", ImVec2(panel_width, panel_height), panel_flags);
+    ImGui::SetWindowFontScale(s * 1.15f);
+    ImGui::TextUnformatted(Tr("This game"));
+    ImGui::SetWindowFontScale(s);
+    ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
+    for (const auto& line : game.details) {
+        if (!line.empty()) {
+            ImGui::TextDisabled("%s", line.c_str());
+        }
+    }
+    ImGui::EndChild();
+
+    if (play) {
+        done = true;
+        Core::FileSys::MntPoints::ignore_game_patches =
+            ImGui::IsKeyDown(ImGuiKey::ImGuiKey_LeftCtrl);
+        runEbootPath = game.ebootPath;
+        runSerial = game.serial;
+    }
+}
+
+/// In a game's own launcher, keeps only that game.
+void KeepSingleGame(std::vector<IconInfo>& icons) {
+    if (!single_game.active) {
+        return;
+    }
+    std::erase_if(icons, [](const IconInfo& icon) {
+        return std::ranges::find(single_game.serials, icon.serial) == single_game.serials.end();
+    });
+}
 
 std::filesystem::path UpdateChecker(const std::string sceItem, std::filesystem::path game_folder) {
     std::filesystem::path updatedPath = "";
@@ -490,6 +697,8 @@ void GetGameIconInfo(std::vector<IconInfo>& icons) {
     std::sort(icons.begin(), icons.end(), [](const IconInfo& a, const IconInfo& b) {
         return a.title < b.title; // Alphabetical order
     });
+    KeepSingleGame(icons);
+    FindBackground(icons);
     FillGameDetails(icons);
 }
 
@@ -504,7 +713,10 @@ void Launch(char* executableName, bool sameProcess) {
         LOG_ERROR(ImGui, "SDL_INIT_GAMEPAD Error: {}", SDL_GetError());
     }
 
-    SDL_Window* window = SDL_CreateWindow("brunoShadPs4", 1280, 800, SDL_WINDOW_RESIZABLE);
+    LoadSingleGame(executableName);
+    SDL_Window* window = SDL_CreateWindow(
+        single_game.active ? single_game.title.c_str() : "brunoShadPs4",
+        single_game.active ? 1440 : 1280, single_game.active ? 960 : 800, SDL_WINDOW_RESIZABLE);
     if (window == nullptr) {
         LOG_ERROR(ImGui, "SDL Window Creation Error: {}", SDL_GetError());
         SDL_Quit();
@@ -556,6 +768,9 @@ void Launch(char* executableName, bool sameProcess) {
         // The launcher always stays in a window; the full screen setting is for the games.
     };
     applySettings();
+    if (single_game.active) {
+        SetSingleGameIcon(window, gameIcons);
+    }
 
     while (!done) {
         SDL_Event event;
@@ -592,25 +807,34 @@ void Launch(char* executableName, bool sameProcess) {
         }
 
         // Top bar: the name on the left, the two actions on the right.
-        ImGui::SetWindowFontScale(uiScale * 1.5f);
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(Tr("brunoShadPs4"));
-        ImGui::SetWindowFontScale(uiScale);
-        ImGui::SameLine();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("%s", fmt::format("  {}", Common::g_version).c_str());
-        ImGui::SameLine();
+        if (!single_game.active) {
+            ImGui::SetWindowFontScale(uiScale * 1.5f);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(Tr("brunoShadPs4"));
+            ImGui::SetWindowFontScale(uiScale);
+            ImGui::SameLine();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", fmt::format("  {}", Common::g_version).c_str());
+            ImGui::SameLine();
+        }
+        const char* add_label = single_game.active ? Tr("Game folder") : Tr("Add games");
         {
+            // A game's own launcher has its settings on its page: only the folder button.
             const float width =
-                ImGui::CalcTextSize(Tr("Add games")).x + ImGui::CalcTextSize(Tr("Settings")).x +
-                ImGui::GetStyle().FramePadding.x * 4.0f + ImGui::GetStyle().ItemSpacing.x;
+                single_game.active
+                    ? ImGui::CalcTextSize(add_label).x + ImGui::GetStyle().FramePadding.x * 2.0f
+                    : ImGui::CalcTextSize(add_label).x + ImGui::CalcTextSize(Tr("Settings")).x +
+                          ImGui::GetStyle().FramePadding.x * 4.0f +
+                          ImGui::GetStyle().ItemSpacing.x;
             ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - width);
         }
-        if (ImGui::Button(Tr("Add games"))) {
+        if (ImGui::Button(add_label)) {
             ImGuiEmuSettings::SettingsWindow::RequestGamesFolder();
         }
-        ImGui::SameLine();
-        if (ImGui::Button(Tr("Settings"))) {
+        if (!single_game.active) {
+            ImGui::SameLine();
+        }
+        if (!single_game.active && ImGui::Button(Tr("Settings"))) {
             EmulatorSettings.SetBigPictureScale(static_cast<int>(uiScale * 1000));
             EmulatorSettings.Save();
             settingsWindow.Prepare();
@@ -629,7 +853,11 @@ void Launch(char* executableName, bool sameProcess) {
 
         int settingsFor = -1;
         int suggestFor = -1;
-        SetGameIcons(gameIcons, settingsFor, suggestFor);
+        if (single_game.active && !gameIcons.empty()) {
+            DrawSingleGame(settingsWindow, showSettings);
+        } else {
+            SetGameIcons(gameIcons, settingsFor, suggestFor);
+        }
         if (suggestFor >= 0) {
             settingsWindow.ApplySuggestedTo(gameIcons[suggestFor].serial,
                                             gameIcons[suggestFor].title);
@@ -652,9 +880,19 @@ void Launch(char* executableName, bool sameProcess) {
         }
         if (gameIcons.empty()) {
             ImGui::Dummy(ImVec2(0.0f, 40.f * uiScale));
-            Overlay::TextCentered(Tr("No games yet. Add the folder that contains your games."));
+            if (single_game.active) {
+                Overlay::TextCentered(
+                    fmt::format(fmt::runtime(Tr("{} was not found. Choose the folder that holds "
+                                                "the game folder.")),
+                                single_game.title)
+                        .c_str());
+            } else {
+                Overlay::TextCentered(
+                    Tr("No games yet. Add the folder that contains your games."));
+            }
             ImGui::Dummy(ImVec2(0.0f, 10.f * uiScale));
-            const char* label = Tr("Add games folder");
+            const char* label =
+                single_game.active ? Tr("Choose the game folder") : Tr("Add games folder");
             const float width =
                 ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0f;
             ImGui::SetCursorPosX((ImGui::GetWindowWidth() - width) * 0.5f);
@@ -678,7 +916,8 @@ void Launch(char* executableName, bool sameProcess) {
 
         // Whose work this is.
         {
-            const char* credit = Tr("A fork of shadPS4");
+            const char* credit = single_game.active ? Tr("Ported to PC")
+                                                    : Tr("Brought to PC with the help of shadPS4");
             const float width = ImGui::CalcTextSize(credit).x + ImGui::CalcTextSize(Tr("About")).x +
                                 ImGui::GetStyle().FramePadding.x * 2.0f +
                                 ImGui::GetStyle().ItemSpacing.x;
@@ -699,7 +938,8 @@ void Launch(char* executableName, bool sameProcess) {
                                    ImGuiWindowFlags_AlwaysAutoResize |
                                        ImGuiWindowFlags_NoTitleBar)) {
             ImGui::SetWindowFontScale(uiScale * 1.4f);
-            ImGui::TextUnformatted(Tr("brunoShadPs4"));
+            ImGui::TextUnformatted(single_game.active ? single_game.title.c_str()
+                                                      : Tr("brunoShadPs4"));
             ImGui::SetWindowFontScale(uiScale);
             ImGui::TextDisabled("%s", fmt::format("{} {}  ({})", Tr("Version"), Common::g_version,
                                                   Common::g_scm_desc)

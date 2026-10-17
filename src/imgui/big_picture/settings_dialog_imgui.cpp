@@ -9,6 +9,7 @@
 #include <mutex>
 #include <optional>
 #include <ranges>
+#include <regex>
 #include <ImGuiFileDialog.h>
 #include <SDL3/SDL_dialog.h>
 #include <SDL3/SDL_error.h>
@@ -87,6 +88,7 @@ void SettingsWindow::LoadSettings(std::string profile) {
     gamePatchSetting = EmulatorSettings.IsUseGamePatch() ? 1 : 0;
     enhanceGameQualitySetting = EmulatorSettings.IsEnhanceGameQualityEnabled();
     fxaaSetting = EmulatorSettings.IsFxaaEnabled();
+    showFpsSetting = EmulatorSettings.IsShowFpsCounter();
     directReadbacksSetting = EmulatorSettings.IsDirectReadbacksEnabled();
     renderTargetSyncSetting = EmulatorSettings.IsRenderTargetSyncEnabled();
     rcasEnabledSetting = EmulatorSettings.IsRcasEnabled();
@@ -161,6 +163,7 @@ void SettingsWindow::SaveSettings(std::string profile) {
     }
     EmulatorSettings.SetEnhanceGameQualityEnabled(enhanceGameQualitySetting, isSpecific);
     EmulatorSettings.SetFxaaEnabled(fxaaSetting, isSpecific);
+    EmulatorSettings.SetShowFpsCounter(showFpsSetting, isSpecific);
     EmulatorSettings.SetDirectReadbacksEnabled(directReadbacksSetting, isSpecific);
     EmulatorSettings.SetRenderTargetSyncEnabled(renderTargetSyncSetting, isSpecific);
     EmulatorSettings.SetRcasEnabled(rcasEnabledSetting, isSpecific);
@@ -357,6 +360,7 @@ void SettingsWindow::ApplySuggested() {
     readbackLinearImagesSetting = suggested->readback_linear_images;
     windowsGuestRedZoneProtectionModeSetting = suggested->red_zone_patches;
     fxaaSetting = suggested->fxaa;
+    showFpsSetting = true;
     frameGenerationSetting = suggested->frame_generation;
     currentCategory = SettingsCategory::Graphics;
 }
@@ -426,6 +430,137 @@ bool SettingsWindow::ConsumeGamesFolder() {
     m_GameInstallDirs.push_back(dir);
     SaveInstallDirs();
     return true;
+}
+
+void SettingsWindow::DrawQuickSettings(const std::string& serial, const std::string& title) {
+    if (quickProfile != serial) {
+        if (!HasOwnSettings(serial) && HasSuggestedFor(serial)) {
+            ApplySuggestedTo(serial, title);
+        }
+        currentProfile = serial + " - " + title;
+        LoadSettings(serial);
+        quickProfile = serial;
+    }
+
+    // One switch per row, with its name after it.
+    const auto toggle = [](const char* label, bool* value) {
+        const bool pressed =
+            BigPictureMode::Theme::Toggle((std::string("##") + label).c_str(), value, 1.0f);
+        ImGui::SameLine(0.0f, 14.0f);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(label);
+        return pressed;
+    };
+    bool changed = false;
+
+    // The resolution the game renders at: its own, or one of the resolution patches of its patch
+    // file ("Resolution Patch (2560x1440)", "Render resolution 2560x1440"...). Choosing one
+    // turns it on and the others off.
+    struct Resolution {
+        std::string label;
+        int patch;
+        int height;
+    };
+    std::vector<Resolution> resolutions{{Tr("Original of the game"), -1, 0}};
+    static const std::regex size_pattern{R"((\d{3,4})\s*x\s*(\d{3,4}))"};
+    for (size_t i = 0; i < gamePatches.size(); ++i) {
+        std::string lower = gamePatches[i].name;
+        std::ranges::transform(lower, lower.begin(), [](unsigned char c) { return std::tolower(c); });
+        std::smatch size;
+        if (lower.find("resolution") != std::string::npos &&
+            std::regex_search(gamePatches[i].name, size, size_pattern)) {
+            resolutions.push_back({size[1].str() + " x " + size[2].str(), static_cast<int>(i),
+                                   std::stoi(size[2].str())});
+        }
+    }
+    std::ranges::sort(resolutions, {}, &Resolution::height);
+    if (resolutions.size() > 1) {
+        size_t current = 0;
+        if (gamePatchSetting != 0) {
+            for (size_t i = 1; i < resolutions.size(); ++i) {
+                if (gamePatches[resolutions[i].patch].enabled) {
+                    current = i;
+                    break;
+                }
+            }
+        }
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(Tr("Resolution"));
+        ImGui::SameLine(0.0f, 14.0f);
+        ImGui::SetNextItemWidth(ImGui::CalcTextSize("0000 x 0000").x * 2.2f);
+        if (ImGui::BeginCombo("##resolution", resolutions[current].label.c_str())) {
+            for (size_t i = 0; i < resolutions.size(); ++i) {
+                if (ImGui::Selectable(resolutions[i].label.c_str(), i == current) &&
+                    i != current) {
+                    for (size_t j = 1; j < resolutions.size(); ++j) {
+                        SetGamePatchEnabled(resolutions[j].patch, j == i);
+                    }
+                    if (i != 0) {
+                        gamePatchSetting = 1;
+                        // What their authors ask for: more of the console's memory for the
+                        // larger render targets.
+                        const int memory = resolutions[i].height >= 2160   ? 4000
+                                           : resolutions[i].height >= 1440 ? 2000
+                                                                           : 0;
+                        extraDmemSetting = std::max(extraDmemSetting, memory);
+                    }
+                    changed = true;
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
+    // The language the game is played in.
+    if (!languageOptions.empty()) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(Tr("Game language"));
+        ImGui::SameLine(0.0f, 14.0f);
+        ImGui::SetNextItemWidth(ImGui::CalcTextSize("Spanish (Latin America)").x * 1.5f);
+        const int language = std::clamp(consoleLanguageSetting, 0,
+                                        static_cast<int>(languageOptions.size()) - 1);
+        if (ImGui::BeginCombo("##language", Tr(languageOptions[language].c_str()))) {
+            for (int i = 0; i < static_cast<int>(languageOptions.size()); ++i) {
+                if (ImGui::Selectable(Tr(languageOptions[i].c_str()), i == language) &&
+                    i != language) {
+                    consoleLanguageSetting = i;
+                    changed = true;
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
+    changed |= toggle(Tr("Frame generation"), &frameGenerationSetting);
+    bool fullscreen = fullscreenModeSetting != 0;
+    if (toggle(Tr("Full screen"), &fullscreen)) {
+        fullscreenModeSetting =
+            fullscreen ? GetComboIndex("Fullscreen (Borderless)", fullscreenModeOptions) : 0;
+        changed = true;
+    }
+    changed |= toggle(Tr("Enlarge with FSR"), &fsrEnabledSetting);
+    if (fsrEnabledSetting) {
+        changed |= toggle(Tr("Sharpen the enlarged picture"), &rcasEnabledSetting);
+    }
+    changed |= toggle(Tr("FXAA anti-aliasing"), &fxaaSetting);
+    changed |= toggle(Tr("Show FPS and resolution"), &showFpsSetting);
+    bool vsync = presentModeSetting != GetComboIndex("Immediate", presentModeOptions);
+    if (toggle(Tr("Vertical sync"), &vsync)) {
+        presentModeSetting = GetComboIndex(vsync ? "FIFO" : "Immediate", presentModeOptions);
+        changed = true;
+    }
+    if (changed) {
+        SaveSettings(serial);
+    }
+
+    if (HasSuggestedFor(serial)) {
+        ImGui::Dummy(ImVec2(0.0f, 4.0f));
+        if (ImGui::Button(Tr("Use recommended settings"))) {
+            ApplySuggestedTo(serial, title);
+            quickProfile.clear();
+        }
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", Tr("Settings tested with this game. You can change them later."));
+        ImGui::PopTextWrapPos();
+    }
 }
 
 void SettingsWindow::OpenProfile(const std::string& serial, const std::string& title) {

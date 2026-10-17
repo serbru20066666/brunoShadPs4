@@ -40,6 +40,14 @@ public:
     static bool HasSuggestedFor(const std::string& serial);
     /// Whether the game already has settings of its own.
     static bool HasOwnSettings(const std::string& serial);
+    /// The main settings of one game, drawn next to its cover in a game's own launcher and
+    /// saved to its profile as they change. The first time, a game with recommended settings
+    /// and no profile of its own gets the recommended ones.
+    void DrawQuickSettings(const std::string& serial, const std::string& title);
+    /// Makes DrawQuickSettings load the profile again: the full dialog uses the same values.
+    void ResetQuickSettings() {
+        quickProfile.clear();
+    }
     /// Gives the game its own settings, set to the suggested ones, and saves them.
     void ApplySuggestedTo(const std::string& serial, const std::string& title);
     void DrawSettings(bool* open, const std::function<void()>& applySettings);
@@ -100,6 +108,8 @@ private:
     float uiScale = 1.0f;
     SettingsCategory currentCategory = SettingsCategory::Profiles;
     std::string currentProfile = "Global";
+    /// The game whose profile DrawQuickSettings has loaded.
+    std::string quickProfile;
 
     std::string runningGameSerial = "";
     bool isGameRunning = false;
@@ -199,6 +209,7 @@ private:
     int gamePatchSetting{};
     bool enhanceGameQualitySetting;
     bool fxaaSetting;
+    bool showFpsSetting;
     bool directReadbacksSetting;
     bool renderTargetSyncSetting;
     bool rcasEnabledSetting;

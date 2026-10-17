@@ -7,17 +7,17 @@
 
 namespace BigPictureMode::Theme {
 
-/// The one colour that marks what is selected or is the main action. It is pale, so anything
-/// written on top of it uses OnAccent.
-constexpr ImVec4 Accent{0.78f, 0.93f, 0.94f, 1.00f};
-constexpr ImVec4 AccentHovered{0.88f, 0.97f, 0.98f, 1.00f};
-constexpr ImVec4 OnAccent{0.05f, 0.06f, 0.07f, 1.00f};
-/// Cards sit on a near black background.
-constexpr ImVec4 Background{0.035f, 0.035f, 0.043f, 1.00f};
-constexpr ImVec4 Card{0.098f, 0.098f, 0.114f, 1.00f};
-constexpr ImVec4 CardHovered{0.135f, 0.135f, 0.155f, 1.00f};
-constexpr ImVec4 Chip{0.155f, 0.155f, 0.178f, 1.00f};
-constexpr ImVec4 TextDim{0.55f, 0.55f, 0.60f, 1.00f};
+/// The one colour that marks what is selected or is the main action: a bright blue, with white
+/// text on top of it (OnAccent).
+constexpr ImVec4 Accent{0.10f, 0.55f, 1.00f, 1.00f};
+constexpr ImVec4 AccentHovered{0.27f, 0.65f, 1.00f, 1.00f};
+constexpr ImVec4 OnAccent{1.00f, 1.00f, 1.00f, 1.00f};
+/// Rounded slate cards on a dark slate background.
+constexpr ImVec4 Background{0.090f, 0.098f, 0.122f, 1.00f};
+constexpr ImVec4 Card{0.133f, 0.145f, 0.180f, 1.00f};
+constexpr ImVec4 CardHovered{0.165f, 0.180f, 0.220f, 1.00f};
+constexpr ImVec4 Chip{0.180f, 0.196f, 0.240f, 1.00f};
+constexpr ImVec4 TextDim{0.58f, 0.61f, 0.68f, 1.00f};
 constexpr ImVec4 Panel = Card;
 
 /// Dark look made of rounded cards and pill shaped controls, shared by the game launcher and the
@@ -26,26 +26,26 @@ inline void Push(float scale) {
     const auto color = [](ImGuiCol id, const ImVec4& value) { ImGui::PushStyleColor(id, value); };
     color(ImGuiCol_WindowBg, Background);
     color(ImGuiCol_ChildBg, Card);
-    color(ImGuiCol_PopupBg, ImVec4(0.12f, 0.12f, 0.14f, 1.0f));
+    color(ImGuiCol_PopupBg, ImVec4(0.150f, 0.163f, 0.200f, 1.0f));
     color(ImGuiCol_Text, ImVec4(0.95f, 0.95f, 0.96f, 1.0f));
     color(ImGuiCol_TextDisabled, TextDim);
     color(ImGuiCol_Border, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-    color(ImGuiCol_Separator, ImVec4(0.16f, 0.16f, 0.19f, 1.0f));
+    color(ImGuiCol_Separator, ImVec4(0.20f, 0.22f, 0.27f, 1.0f));
     color(ImGuiCol_Button, Chip);
-    color(ImGuiCol_ButtonHovered, ImVec4(0.21f, 0.21f, 0.24f, 1.0f));
-    color(ImGuiCol_ButtonActive, ImVec4(0.26f, 0.26f, 0.30f, 1.0f));
+    color(ImGuiCol_ButtonHovered, ImVec4(0.225f, 0.245f, 0.300f, 1.0f));
+    color(ImGuiCol_ButtonActive, ImVec4(0.270f, 0.295f, 0.360f, 1.0f));
     color(ImGuiCol_FrameBg, Chip);
-    color(ImGuiCol_FrameBgHovered, ImVec4(0.19f, 0.19f, 0.22f, 1.0f));
-    color(ImGuiCol_FrameBgActive, ImVec4(0.22f, 0.22f, 0.26f, 1.0f));
-    color(ImGuiCol_Header, ImVec4(0.19f, 0.19f, 0.22f, 1.0f));
-    color(ImGuiCol_HeaderHovered, ImVec4(0.22f, 0.22f, 0.26f, 1.0f));
-    color(ImGuiCol_HeaderActive, ImVec4(0.26f, 0.26f, 0.30f, 1.0f));
+    color(ImGuiCol_FrameBgHovered, ImVec4(0.215f, 0.235f, 0.285f, 1.0f));
+    color(ImGuiCol_FrameBgActive, ImVec4(0.250f, 0.272f, 0.330f, 1.0f));
+    color(ImGuiCol_Header, ImVec4(0.215f, 0.235f, 0.285f, 1.0f));
+    color(ImGuiCol_HeaderHovered, ImVec4(0.250f, 0.272f, 0.330f, 1.0f));
+    color(ImGuiCol_HeaderActive, ImVec4(0.290f, 0.315f, 0.380f, 1.0f));
     color(ImGuiCol_TableRowBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
     color(ImGuiCol_TableRowBgAlt, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
     color(ImGuiCol_TableBorderLight, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
     color(ImGuiCol_TableBorderStrong, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
     color(ImGuiCol_ScrollbarBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-    color(ImGuiCol_ScrollbarGrab, ImVec4(0.22f, 0.22f, 0.26f, 1.0f));
+    color(ImGuiCol_ScrollbarGrab, ImVec4(0.250f, 0.272f, 0.330f, 1.0f));
     color(ImGuiCol_CheckMark, Accent);
     color(ImGuiCol_SliderGrab, Accent);
     color(ImGuiCol_SliderGrabActive, AccentHovered);
@@ -100,7 +100,7 @@ inline bool Toggle(const char* id, bool* value, float scale) {
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
     const ImVec4 track =
         *value ? (hovered ? AccentHovered : Accent)
-               : (hovered ? ImVec4(0.26f, 0.26f, 0.30f, 1.0f) : ImVec4(0.20f, 0.20f, 0.23f, 1.0f));
+               : (hovered ? ImVec4(0.29f, 0.31f, 0.38f, 1.0f) : ImVec4(0.22f, 0.24f, 0.29f, 1.0f));
     draw_list->AddRectFilled(pos, {pos.x + width, pos.y + height}, ImGui::GetColorU32(track),
                              height * 0.5f);
     const float radius = height * 0.5f - height * 0.16f;

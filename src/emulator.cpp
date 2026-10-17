@@ -18,6 +18,7 @@
 extern char** environ;
 #endif
 
+#include "common/game_edition.h"
 #include "common/debug.h"
 #include "common/logging/log.h"
 #include "common/string_util.h"
@@ -600,6 +601,9 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
             window_title = fmt::format("shadPS4 v{} {}/{} {} | {}", Common::g_version, remote_host,
                                        Common::g_scm_branch, Common::g_scm_desc, game_title);
         }
+    }
+    if (Common::LoadGameEdition(executableName ? executableName : "").active) {
+        window_title = title;
     }
     window = std::make_unique<Frontend::WindowSDL>(EmulatorSettings.GetWindowWidth(),
                                                    EmulatorSettings.GetWindowHeight(), controllers,
