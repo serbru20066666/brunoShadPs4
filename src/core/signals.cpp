@@ -13,6 +13,7 @@
 #include "emulator.h"
 
 #ifdef _WIN32
+#include <cstdio>
 #include <windows.h>
 static constexpr DWORD MS_VC_EXCEPTION = 0x406D1388;
 #else
@@ -26,6 +27,56 @@ static constexpr DWORD MS_VC_EXCEPTION = 0x406D1388;
 namespace Core {
 
 #if defined(_WIN32)
+
+/// Appends what is needed to locate an unhandled exception to crash_report.txt in the working
+/// folder: the log is written asynchronously and the process usually ends before it reaches the
+/// file. Code addresses are given as offsets into shadPS4.exe, to be resolved with its .pdb
+/// (llvm-symbolizer --obj=shadPS4.exe 0x<offset>). The handler runs on the faulting thread,
+/// so the captured stack goes through the faulting function and its callers.
+static void WriteCrashReport(const EXCEPTION_POINTERS* pExp) noexcept {
+    std::FILE* file = std::fopen("crash_report.txt", "a");
+    if (!file) {
+        return;
+    }
+    const auto base = reinterpret_cast<u64>(GetModuleHandleW(nullptr));
+    const auto* record = pExp->ExceptionRecord;
+    const auto rip = reinterpret_cast<u64>(record->ExceptionAddress);
+    SYSTEMTIME time;
+    GetLocalTime(&time);
+    std::fprintf(file, "%04u-%02u-%02u %02u:%02u:%02u exception %#lx at %#llx (exe+%#llx)",
+                 time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond,
+                 record->ExceptionCode, rip, rip - base);
+    if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= 2) {
+        std::fprintf(file, ", %s %#llx",
+                     record->ExceptionInformation[0] == 0   ? "reading"
+                     : record->ExceptionInformation[0] == 8 ? "executing"
+                                                            : "writing",
+                     static_cast<unsigned long long>(record->ExceptionInformation[1]));
+    }
+    std::fprintf(file, ", thread %lu", GetCurrentThreadId());
+    PWSTR description = nullptr;
+    if (SUCCEEDED(GetThreadDescription(GetCurrentThread(), &description)) && description) {
+        std::fprintf(file, " \"%ls\"", description);
+        LocalFree(description);
+    }
+    std::fprintf(file, "\nstack:");
+    void* frames[48];
+    const USHORT count = RtlCaptureStackBackTrace(0, 48, frames, nullptr);
+    for (USHORT i = 0; i < count; ++i) {
+        const auto frame = reinterpret_cast<u64>(frames[i]);
+        HMODULE module = nullptr;
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               reinterpret_cast<LPCWSTR>(frames[i]), &module) &&
+            reinterpret_cast<u64>(module) == base) {
+            std::fprintf(file, " exe+%#llx", frame - base);
+        } else {
+            std::fprintf(file, " %#llx", frame);
+        }
+    }
+    std::fprintf(file, "\n");
+    std::fclose(file);
+}
 
 static LONG WINAPI SignalHandler(EXCEPTION_POINTERS* pExp) noexcept {
     using namespace Libraries::Kernel;
@@ -141,6 +192,7 @@ static LONG WINAPI SignalHandler(EXCEPTION_POINTERS* pExp) noexcept {
     const bool report_unhandled =
         use_static_windows_guest_red_zone_protection ? static_protection_exception : true;
     if (report_unhandled) {
+        WriteCrashReport(pExp);
         LOG_CRITICAL(Debug, "Unhandled Exception code {:#x} at {}", code, address);
         Common::Singleton<Core::Emulator>::Instance()->Shutdown();
     }
