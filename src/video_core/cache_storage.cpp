@@ -165,8 +165,23 @@ bool WriteVector(const BlobType type, std::filesystem::path&& path_, std::vector
                 }
             } else {
                 using namespace Common::FS;
-                const auto file = IOFile{path, FileAccessMode::Create};
-                file.Write(v);
+                // Written under a temporary name and renamed when complete: a crash in the
+                // middle of the write used to leave a truncated blob that crashed every later
+                // boot while loading the cache.
+                auto temporary{path};
+                temporary += ".tmp";
+                bool written = false;
+                {
+                    const auto file = IOFile{temporary, FileAccessMode::Create};
+                    written = file.IsOpen() && file.Write(v) == v.size();
+                }
+                std::error_code ec;
+                if (written) {
+                    std::filesystem::rename(temporary, path, ec);
+                }
+                if (!written || ec) {
+                    std::filesystem::remove(temporary, ec);
+                }
             }
         }};
         std::scoped_lock lock{m_request};
