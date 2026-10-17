@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <unordered_set>
 #include <chrono>
 #include "common/debug.h"
 #include "common/elf_info.h"
@@ -873,8 +874,14 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
                 const u64 offset_aligned = Common::AlignDown(offset, alignment);
                 const u64 adjust = offset - offset_aligned;
                 if (adjust % 4 != 0) {
-                    LOG_WARNING(Render_Vulkan, "Buffer binding in shader {:#x} isn't dword aligned",
-                                stage.pgm_hash);
+                    // Expected in some games (The Order: 1886 binds 16-bit lists 2 bytes off):
+                    // said once per shader, not on every draw.
+                    static std::unordered_set<u64> reported;
+                    if (reported.insert(stage.pgm_hash).second) {
+                        LOG_WARNING(Render_Vulkan,
+                                    "Buffer binding in shader {:#x} isn't dword aligned",
+                                    stage.pgm_hash);
+                    }
                 }
                 push_data.AddOffset(binding.buffer, adjust);
                 buffer_infos.emplace_back(buffer->Handle(), offset_aligned, size + adjust);
@@ -907,7 +914,11 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
     for (const auto& image_desc : stage.images) {
         const auto tsharp = image_desc.GetSharp(stage);
         if (texture_cache.IsMeta(tsharp.Address())) {
-            LOG_WARNING(Render_Vulkan, "Unexpected metadata read by a shader (texture)");
+            static std::unordered_set<u64> reported;
+            if (reported.insert(stage.pgm_hash).second) {
+                LOG_WARNING(Render_Vulkan, "Unexpected metadata read by shader {:#x} (texture)",
+                            stage.pgm_hash);
+            }
         }
 
         const auto data_fmt = tsharp.GetDataFmt();

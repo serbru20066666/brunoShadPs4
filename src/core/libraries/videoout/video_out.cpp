@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
 #include "common/assert.h"
 #include "common/elf_info.h"
 #include "common/logging/log.h"
@@ -160,7 +161,10 @@ s32 PS4_SYSV_ABI sceVideoOutSubmitFlip(s32 handle, s32 bufferIndex, s32 flipMode
     }
 
     if (flipMode != 1) {
-        LOG_WARNING(Lib_VideoOut, "flipmode = {}", flipMode);
+        static std::atomic_bool reported{false};
+        if (!reported.exchange(true)) {
+            LOG_WARNING(Lib_VideoOut, "flipmode = {}", flipMode);
+        }
     }
 
     if (bufferIndex < -1 || bufferIndex > 15) {
