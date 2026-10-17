@@ -331,6 +331,26 @@ bool IsGameFolder(const std::filesystem::path& path) {
            std::filesystem::exists(path / "sce_sys" / "param.sfo", ec);
 }
 
+/// The extra memory a resolution patch needs, from the height it renders at: what the authors of
+/// the God of War III and inFamous patches ask for (2000 MiB at 1440p, 4000 at 2160p).
+int PatchMemoryFor(int height) {
+    return height >= 2160 ? 4000 : height >= 1440 ? 2000 : 0;
+}
+
+/// The height of a resolution patch ("Resolution Patch (2560x1440)", "Render resolution
+/// 2560x1440"), or 0 for any other patch.
+int ResolutionPatchHeight(const std::string& name) {
+    static const std::regex size_pattern{R"((\d{3,4})\s*x\s*(\d{3,4}))"};
+    std::string lower = name;
+    std::ranges::transform(lower, lower.begin(), [](unsigned char c) { return std::tolower(c); });
+    std::smatch size;
+    if (lower.find("resolution") == std::string::npos ||
+        !std::regex_search(name, size, size_pattern)) {
+        return 0;
+    }
+    return std::stoi(size[2].str());
+}
+
 const Suggested* FindSuggested(const std::string& profile) {
     const auto it = std::ranges::find_if(SuggestedSettings, [&](const Suggested& suggested) {
         return profile.starts_with(suggested.serial);
@@ -361,6 +381,16 @@ void SettingsWindow::ApplySuggested() {
     windowsGuestRedZoneProtectionModeSetting = suggested->red_zone_patches;
     fxaaSetting = suggested->fxaa;
     showFpsSetting = true;
+    // The memory the game's enabled resolution patch needs: without it, God of War III at
+    // 1440p cannot allocate its video arena and closes.
+    if (gamePatchSetting != 0) {
+        for (const auto& patch : gamePatches) {
+            if (patch.enabled) {
+                extraDmemSetting =
+                    std::max(extraDmemSetting, PatchMemoryFor(ResolutionPatchHeight(patch.name)));
+            }
+        }
+    }
     frameGenerationSetting = suggested->frame_generation;
     currentCategory = SettingsCategory::Graphics;
 }
@@ -464,10 +494,8 @@ void SettingsWindow::DrawQuickSettings(const std::string& serial, const std::str
     std::vector<Resolution> resolutions{{Tr("Original of the game"), -1, 0}};
     static const std::regex size_pattern{R"((\d{3,4})\s*x\s*(\d{3,4}))"};
     for (size_t i = 0; i < gamePatches.size(); ++i) {
-        std::string lower = gamePatches[i].name;
-        std::ranges::transform(lower, lower.begin(), [](unsigned char c) { return std::tolower(c); });
         std::smatch size;
-        if (lower.find("resolution") != std::string::npos &&
+        if (ResolutionPatchHeight(gamePatches[i].name) != 0 &&
             std::regex_search(gamePatches[i].name, size, size_pattern)) {
             resolutions.push_back({size[1].str() + " x " + size[2].str(), static_cast<int>(i),
                                    std::stoi(size[2].str())});
@@ -485,9 +513,7 @@ void SettingsWindow::DrawQuickSettings(const std::string& serial, const std::str
             }
         }
         // The memory the enabled patch needs, also when it was enabled in its file already.
-        const int needed = resolutions[current].height >= 2160   ? 4000
-                           : resolutions[current].height >= 1440 ? 2000
-                                                                 : 0;
+        const int needed = PatchMemoryFor(resolutions[current].height);
         if (extraDmemSetting < needed) {
             extraDmemSetting = needed;
             changed = true;
@@ -507,10 +533,8 @@ void SettingsWindow::DrawQuickSettings(const std::string& serial, const std::str
                         gamePatchSetting = 1;
                         // What their authors ask for: more of the console's memory for the
                         // larger render targets.
-                        const int memory = resolutions[i].height >= 2160   ? 4000
-                                           : resolutions[i].height >= 1440 ? 2000
-                                                                           : 0;
-                        extraDmemSetting = std::max(extraDmemSetting, memory);
+                        extraDmemSetting =
+                            std::max(extraDmemSetting, PatchMemoryFor(resolutions[i].height));
                     }
                     changed = true;
                 }
