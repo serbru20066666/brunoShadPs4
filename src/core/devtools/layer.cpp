@@ -294,6 +294,17 @@ void L::DrawSimple() {
     } else {
         Text("%d FPS (%.1f ms)", static_cast<int>(std::round(frameRate)), 1000.0f / frameRate);
     }
+    // The resolution the game renders at, and the one on screen when it is enlarged.
+    const auto [game_width, game_height] = DebugState.game_resolution;
+    const auto [output_width, output_height] = DebugState.output_resolution;
+    if (game_width != 0 && game_height != 0) {
+        if (output_width != 0 && (output_width != game_width || output_height != game_height)) {
+            Text("%ux%u -> %ux%u%s", game_width, game_height, output_width, output_height,
+                 EmulatorSettings.IsFsrEnabled() ? " FSR" : "");
+        } else {
+            Text("%ux%u", game_width, game_height);
+        }
+    }
     PopStyleColor();
 }
 
