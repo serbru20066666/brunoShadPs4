@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/game_edition.h"
 #include <filesystem>
 #include <iostream>
 #include <SDL3/SDL_messagebox.h>
@@ -297,7 +298,10 @@ Users UserManager::CreateDefaultUsers() {
             std::filesystem::create_directory(user_dir / "trophy");
             std::filesystem::create_directory(user_dir / "inputs");
             if (u.user_id == 1000) {
-                TransferOption user_choice = AskMigrationOption();
+                // A game's own edition keeps its data next to it and asks nothing.
+                TransferOption user_choice = Common::CurrentGameEdition().active
+                                                 ? TransferOption::Nothing
+                                                 : AskMigrationOption();
                 CheckAndMigrateSaves(user_choice);
                 CheckAndMigrateTrophies(user_choice);
             }

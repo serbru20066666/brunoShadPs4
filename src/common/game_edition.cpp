@@ -6,6 +6,10 @@
 
 #include "common/game_edition.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace Common {
 
 const GameEdition& LoadGameEdition(const std::filesystem::path& executable) {
@@ -42,6 +46,17 @@ const GameEdition& LoadGameEdition(const std::filesystem::path& executable) {
         return result;
     }();
     return edition;
+}
+
+const GameEdition& CurrentGameEdition() {
+#ifdef _WIN32
+    wchar_t path[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, path, MAX_PATH);
+    return LoadGameEdition(std::filesystem::path{path});
+#else
+    std::error_code ec;
+    return LoadGameEdition(std::filesystem::read_symlink("/proc/self/exe", ec));
+#endif
 }
 
 } // namespace Common

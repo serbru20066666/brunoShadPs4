@@ -23,5 +23,7 @@ struct GameEdition {
 
 /// Reads the juego.ini next to the executable the first time; returns the same after that.
 const GameEdition& LoadGameEdition(const std::filesystem::path& executable);
+/// The same for the running executable.
+const GameEdition& CurrentGameEdition();
 
 } // namespace Common

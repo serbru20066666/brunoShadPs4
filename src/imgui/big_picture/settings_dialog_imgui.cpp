@@ -484,6 +484,14 @@ void SettingsWindow::DrawQuickSettings(const std::string& serial, const std::str
                 }
             }
         }
+        // The memory the enabled patch needs, also when it was enabled in its file already.
+        const int needed = resolutions[current].height >= 2160   ? 4000
+                           : resolutions[current].height >= 1440 ? 2000
+                                                                 : 0;
+        if (extraDmemSetting < needed) {
+            extraDmemSetting = needed;
+            changed = true;
+        }
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(Tr("Resolution"));
         ImGui::SameLine(0.0f, 14.0f);
