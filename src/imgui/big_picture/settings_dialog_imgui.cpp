@@ -292,15 +292,18 @@ struct Suggested {
     bool fxaa;
     bool frame_generation;
     bool direct_memory_access;
+    /// A European release: it has no Latin American Spanish, Brazilian Portuguese or Canadian
+    /// French, and the game crashes in them (inFamous Second Son, seconds after loading).
+    bool european;
 };
 constexpr std::array SuggestedSettings{
-    Suggested{"CUSA01623", 0, false, true, false, true, true, false}, // God of War III Remastered
-    Suggested{"CUSA00004", 2, true, false, true, false, true, true},  // inFamous Second Son
+    Suggested{"CUSA01623", 0, false, true, false, true, true, false, false}, // God of War III
+    Suggested{"CUSA00004", 2, true, false, true, false, true, true, true},   // inFamous Second Son
     // The Order: 1886. Without precise readbacks its command queues wait on each other for
     // good after the menu, on a black screen.
-    Suggested{"CUSA00035", 2, true, true, false, false, false, true},
-    Suggested{"CUSA00076", 2, true, true, false, false, false, true},
-    Suggested{"CUSA00100", 2, true, true, false, false, false, true},
+    Suggested{"CUSA00035", 2, true, true, false, false, false, true, false},
+    Suggested{"CUSA00076", 2, true, true, false, false, false, true, true},
+    Suggested{"CUSA00100", 2, true, true, false, false, false, true, false},
 };
 
 // The folder picked in the system's dialog. Its callback can run on another thread.
@@ -355,6 +358,20 @@ int ResolutionPatchHeight(const std::string& name) {
     return std::stoi(size[2].str());
 }
 
+/// The variant of a language that a European release has, for those it lacks.
+std::string_view EuropeanVariant(std::string_view language) {
+    if (language == "Spanish (Latin America)") {
+        return "Spanish (Spain)";
+    }
+    if (language == "Portuguese (Brazil)") {
+        return "Portuguese (Portugal)";
+    }
+    if (language == "French (Canada)") {
+        return "French (France)";
+    }
+    return language;
+}
+
 const Suggested* FindSuggested(const std::string& profile) {
     const auto it = std::ranges::find_if(SuggestedSettings, [&](const Suggested& suggested) {
         return profile.starts_with(suggested.serial);
@@ -386,6 +403,13 @@ void SettingsWindow::ApplySuggested() {
     fxaaSetting = suggested->fxaa;
     showFpsSetting = true;
     directMemoryAccessSetting = suggested->direct_memory_access;
+    // Compiled shaders are kept between sessions.
+    pipelineCacheEnabledSetting = true;
+    if (suggested->european && consoleLanguageSetting >= 0 &&
+        consoleLanguageSetting < static_cast<int>(languageOptions.size())) {
+        consoleLanguageSetting = GetComboIndex(
+            std::string{EuropeanVariant(languageOptions[consoleLanguageSetting])}, languageOptions);
+    }
     // The memory the enabled patches ask for: without it, God of War III at 1440p cannot
     // allocate its video arena and closes.
     int needed = 0;
@@ -476,6 +500,18 @@ void SettingsWindow::DrawQuickSettings(const std::string& serial, const std::str
         currentProfile = serial + " - " + title;
         LoadSettings(serial);
         quickProfile = serial;
+        // A profile made before, in a language a European release lacks, gets the European one.
+        const Suggested* suggested = FindSuggested(serial);
+        if (suggested && suggested->european && consoleLanguageSetting >= 0 &&
+            consoleLanguageSetting < static_cast<int>(languageOptions.size())) {
+            const int fixed = GetComboIndex(
+                std::string{EuropeanVariant(languageOptions[consoleLanguageSetting])},
+                languageOptions);
+            if (fixed != consoleLanguageSetting) {
+                consoleLanguageSetting = fixed;
+                SaveSettings(serial);
+            }
+        }
     }
 
     // One switch per row, with its name after it.
@@ -554,8 +590,13 @@ void SettingsWindow::DrawQuickSettings(const std::string& serial, const std::str
         ImGui::SetNextItemWidth(ImGui::CalcTextSize("Spanish (Latin America)").x * 1.5f);
         const int language = std::clamp(consoleLanguageSetting, 0,
                                         static_cast<int>(languageOptions.size()) - 1);
+        const Suggested* suggested = FindSuggested(serial);
+        const bool european = suggested && suggested->european;
         if (ImGui::BeginCombo("##language", Tr(languageOptions[language].c_str()))) {
             for (int i = 0; i < static_cast<int>(languageOptions.size()); ++i) {
+                if (european && EuropeanVariant(languageOptions[i]) != languageOptions[i]) {
+                    continue;
+                }
                 if (ImGui::Selectable(Tr(languageOptions[i].c_str()), i == language) &&
                     i != language) {
                     consoleLanguageSetting = i;
