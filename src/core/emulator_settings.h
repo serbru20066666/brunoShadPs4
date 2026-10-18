@@ -222,6 +222,7 @@ struct GeneralSettings {
             make_override<GeneralSettings>("trophy_notification_duration",
                                            &GeneralSettings::trophy_notification_duration),
             make_override<GeneralSettings>("show_splash", &GeneralSettings::show_splash),
+            make_override<GeneralSettings>("show_fps_counter", &GeneralSettings::show_fps_counter),
             make_override<GeneralSettings>("trophy_notification_side",
                                            &GeneralSettings::trophy_notification_side),
             make_override<GeneralSettings>("connected_to_network",

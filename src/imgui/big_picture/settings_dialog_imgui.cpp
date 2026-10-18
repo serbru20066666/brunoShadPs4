@@ -500,6 +500,7 @@ void SettingsWindow::DrawQuickSettings(const std::string& serial, const std::str
         currentProfile = serial + " - " + title;
         LoadSettings(serial);
         quickProfile = serial;
+        quickDirty = false;
         // A profile made before, in a language a European release lacks, gets the European one.
         const Suggested* suggested = FindSuggested(serial);
         if (suggested && suggested->european && consoleLanguageSetting >= 0 &&
@@ -625,11 +626,28 @@ void SettingsWindow::DrawQuickSettings(const std::string& serial, const std::str
         changed = true;
     }
     if (changed) {
-        SaveSettings(serial);
+        quickDirty = true;
+    }
+
+    // Changes are saved with Apply, or when the game is started.
+    ImGui::Dummy(ImVec2(0.0f, 4.0f));
+    if (quickDirty) {
+        if (BigPictureMode::Theme::AccentButton(Tr("Apply"))) {
+            ApplyQuickSettings();
+        }
+        ImGui::SameLine(0.0f, 12.0f);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", Tr("Changes not applied yet"));
+    } else {
+        ImGui::BeginDisabled();
+        ImGui::Button(Tr("Apply"));
+        ImGui::EndDisabled();
+        ImGui::SameLine(0.0f, 12.0f);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", Tr("Settings applied"));
     }
 
     if (HasSuggestedFor(serial)) {
-        ImGui::Dummy(ImVec2(0.0f, 4.0f));
         if (ImGui::Button(Tr("Use recommended settings"))) {
             ApplySuggestedTo(serial, title);
             quickProfile.clear();

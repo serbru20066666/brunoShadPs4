@@ -47,6 +47,14 @@ public:
     /// Makes DrawQuickSettings load the profile again: the full dialog uses the same values.
     void ResetQuickSettings() {
         quickProfile.clear();
+        quickDirty = false;
+    }
+    /// Saves what was changed in DrawQuickSettings and not applied yet.
+    void ApplyQuickSettings() {
+        if (quickDirty && !quickProfile.empty()) {
+            SaveSettings(quickProfile);
+        }
+        quickDirty = false;
     }
     /// Gives the game its own settings, set to the suggested ones, and saves them.
     void ApplySuggestedTo(const std::string& serial, const std::string& title);
@@ -110,6 +118,8 @@ private:
     std::string currentProfile = "Global";
     /// The game whose profile DrawQuickSettings has loaded.
     std::string quickProfile;
+    /// Changes made in DrawQuickSettings that the Apply button (or Play) has not saved yet.
+    bool quickDirty{};
 
     std::string runningGameSerial = "";
     bool isGameRunning = false;

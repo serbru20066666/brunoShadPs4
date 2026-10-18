@@ -61,6 +61,9 @@ struct SingleGame {
     /// game's own art (sce_sys/pic1.png). Nothing is shipped with the launcher.
     SDL_Texture* background{};
     bool background_searched{};
+    /// The window height that shows the whole page, measured while drawing it: the window is
+    /// resized to it.
+    float wanted_height{};
 };
 SingleGame single_game;
 
@@ -155,7 +158,8 @@ void DrawSingleGame(ImGuiEmuSettings::SettingsWindow& settings, bool show_settin
     const IconInfo& game = gameIcons[0];
     const float s = uiScale;
     const float width = ImGui::GetContentRegionAvail().x;
-    const float banner_height = std::max(220.0f * s, ImGui::GetContentRegionAvail().y * 0.38f);
+    // Its contents set the banner's height: the window is sized to the page, not the other way.
+    const float banner_height = 230.0f * s;
     const float rounding = 26.0f * s;
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
     const ImVec2 min = ImGui::GetCursorScreenPos();
@@ -220,6 +224,7 @@ void DrawSingleGame(ImGuiEmuSettings::SettingsWindow& settings, bool show_settin
     } else {
         settings.DrawQuickSettings(game.serial, game.title);
     }
+    const float settings_height = ImGui::GetCursorPosY() + ImGui::GetStyle().WindowPadding.y;
     ImGui::EndChild();
     ImGui::SameLine(0.0f, gap);
     ImGui::BeginChild("GameInfo", ImVec2(panel_width, panel_height), panel_flags);
@@ -232,9 +237,17 @@ void DrawSingleGame(ImGuiEmuSettings::SettingsWindow& settings, bool show_settin
             ImGui::TextDisabled("%s", line.c_str());
         }
     }
+    const float info_height = ImGui::GetCursorPosY() + ImGui::GetStyle().WindowPadding.y;
     ImGui::EndChild();
+    // The panels start here: the window has to reach their longest content, then the bottom bar.
+    const float panels_top = max.y + 22.0f * s - ImGui::GetMainViewport()->Pos.y;
+    single_game.wanted_height = panels_top + std::max(settings_height, info_height) +
+                                ImGui::GetFrameHeightWithSpacing() +
+                                ImGui::GetStyle().WindowPadding.y + 16.0f * s;
 
     if (play) {
+        // What was changed and not applied yet goes with the game.
+        settings.ApplyQuickSettings();
         done = true;
         Core::FileSys::MntPoints::ignore_game_patches =
             ImGui::IsKeyDown(ImGuiKey::ImGuiKey_LeftCtrl);
@@ -716,7 +729,8 @@ void Launch(char* executableName, bool sameProcess) {
     LoadSingleGame(executableName);
     SDL_Window* window = SDL_CreateWindow(
         single_game.active ? single_game.title.c_str() : "brunoShadPs4",
-        single_game.active ? 1440 : 1280, single_game.active ? 960 : 800, SDL_WINDOW_RESIZABLE);
+        single_game.active ? 1440 : 1280, single_game.active ? 960 : 800,
+        single_game.active ? SDL_WindowFlags{0} : SDL_WINDOW_RESIZABLE);
     if (window == nullptr) {
         LOG_ERROR(ImGui, "SDL Window Creation Error: {}", SDL_GetError());
         SDL_Quit();
@@ -770,6 +784,8 @@ void Launch(char* executableName, bool sameProcess) {
     applySettings();
     if (single_game.active) {
         SetSingleGameIcon(window, gameIcons);
+        // Its size follows its contents; the size slider is not shown.
+        uiScale = 1.0f;
     }
 
     while (!done) {
@@ -901,18 +917,21 @@ void Launch(char* executableName, bool sameProcess) {
             }
         }
         ImGui::EndChild();
-        ImGui::SetNextItemWidth(150.0f * uiScale);
-        if (ImGui::IsWindowAppearing()) {
-            sliderScale = uiScale;
+        if (!single_game.active) {
+            ImGui::SetNextItemWidth(150.0f * uiScale);
+            if (ImGui::IsWindowAppearing()) {
+                sliderScale = uiScale;
+            }
+            ImGui::SliderFloat("##scale", &sliderScale, 0.75f, 1.5f, "");
+            // Only apply the size once the slider is released, so it does not move under the
+            // mouse.
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                uiScale = sliderScale;
+            }
+            ImGui::SameLine();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled(Tr("Size"));
         }
-        ImGui::SliderFloat("##scale", &sliderScale, 0.75f, 1.5f, "");
-        // Only apply the size once the slider is released, so it does not move under the mouse.
-        if (ImGui::IsItemDeactivatedAfterEdit()) {
-            uiScale = sliderScale;
-        }
-        ImGui::SameLine();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled(Tr("Size"));
 
         // Whose work this is.
         {
@@ -921,7 +940,9 @@ void Launch(char* executableName, bool sameProcess) {
             const float width = ImGui::CalcTextSize(credit).x + ImGui::CalcTextSize(Tr("About")).x +
                                 ImGui::GetStyle().FramePadding.x * 2.0f +
                                 ImGui::GetStyle().ItemSpacing.x;
-            ImGui::SameLine();
+            if (!single_game.active) {
+                ImGui::SameLine();
+            }
             ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - width);
             ImGui::AlignTextToFramePadding();
             ImGui::TextDisabled("%s", credit);
@@ -981,6 +1002,24 @@ void Launch(char* executableName, bool sameProcess) {
         SDL_RenderClear(renderer);
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
         SDL_RenderPresent(renderer);
+
+        if (single_game.active && single_game.wanted_height > 0.0f) {
+            int width{}, height{};
+            SDL_GetWindowSize(window, &width, &height);
+            SDL_Rect usable{};
+            const int screen_height =
+                SDL_GetDisplayUsableBounds(SDL_GetDisplayForWindow(window), &usable)
+                    ? usable.h - 48
+                    : 2000;
+            const float wanted = single_game.wanted_height;
+            if (wanted > static_cast<float>(screen_height)) {
+                uiScale = std::max(0.6f, uiScale * static_cast<float>(screen_height) / wanted);
+            }
+            const int target = std::min(static_cast<int>(std::ceil(wanted)), screen_height);
+            if (std::abs(target - height) > 2) {
+                SDL_SetWindowSize(window, width, target);
+            }
+        }
     }
 
     ImGui_ImplSDLRenderer3_Shutdown();
