@@ -159,6 +159,8 @@ private:
     Frame* held_frame{};
     std::chrono::steady_clock::time_point held_due{};
     std::chrono::steady_clock::time_point last_game_frame_time{};
+    // Frame generation: the smoothed time between game frames in milliseconds (0: none yet).
+    float smoothed_frame_ms{};
     std::chrono::steady_clock::time_point displayed_window_start{};
     u32 displayed_frames{};
     u32 generated_frames{};

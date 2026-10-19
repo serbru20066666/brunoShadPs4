@@ -35,7 +35,10 @@
 #include <chrono>
 #include <cmath>
 #include <csetjmp>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <string_view>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -897,6 +900,39 @@ void Presenter::PaceGeneratedFrames(std::chrono::steady_clock::time_point next_v
 
 void Presenter::CountDisplayedFrame(bool generated) {
     const auto now = std::chrono::steady_clock::now();
+    // SHADPS4_FG_STATS=1: every 5 s, how evenly frames reached the screen (the gaps between shown frames).
+    static const bool fg_stats = std::getenv("SHADPS4_FG_STATS") != nullptr;
+    if (fg_stats) {
+        static std::chrono::steady_clock::time_point last_shown{}, stats_start{};
+        static std::vector<float> gaps;
+        static u32 generated_shown = 0;
+        if (last_shown.time_since_epoch().count() != 0) {
+            gaps.push_back(std::chrono::duration<float, std::milli>(now - last_shown).count());
+        } else {
+            stats_start = now;
+        }
+        last_shown = now;
+        generated_shown += generated;
+        if (now - stats_start >= std::chrono::seconds(5) && !gaps.empty()) {
+            float sum = 0.0f, sum2 = 0.0f, worst = 0.0f;
+            for (const float gap : gaps) {
+                sum += gap;
+                sum2 += gap * gap;
+                worst = std::max(worst, gap);
+            }
+            const float mean = sum / static_cast<float>(gaps.size());
+            const float deviation = std::sqrt(std::max(0.0f, sum2 / static_cast<float>(gaps.size()) - mean * mean));
+            std::sort(gaps.begin(), gaps.end());
+            LOG_INFO(Render_Vulkan,
+                     "FG-STATS shown={} generated={} fps={:.1f} gap_ms mean={:.2f} dev={:.2f} p95={:.2f} max={:.2f}",
+                     gaps.size(), generated_shown,
+                     static_cast<float>(gaps.size()) / std::chrono::duration<float>(now - stats_start).count(), mean,
+                     deviation, gaps[gaps.size() * 95 / 100], worst);
+            gaps.clear();
+            generated_shown = 0;
+            stats_start = now;
+        }
+    }
     ++displayed_frames;
     generated_frames += generated;
     const std::chrono::duration<float> elapsed = now - displayed_window_start;
@@ -1109,12 +1145,27 @@ void Presenter::PresentImage(Frame* frame, bool is_reusing_frame, bool is_game_f
         const std::chrono::nanoseconds vblank{1'000'000'000 /
                                               EmulatorSettings.GetVblankFrequency()};
         const s64 periods = std::clamp<s64>((since_last + vblank / 2) / vblank, 1, 4);
-        const auto frame_time = vblank * periods;
         const bool reset = since_last > vblank * 9 / 2;
-        generated_texture = frame_gen_pass.Render(
-            cmdbuf, frame->image, {frame->width, frame->height}, frame->is_hdr,
-            std::chrono::duration<float, std::milli>(frame_time).count(), reset);
-        held_due = now + frame_time / 2;
+        // The interval the generated frame splits: smoothed over the last frames (as brunoKytyPs5 does), so a game
+        // that alternates one and two vblanks, or hands one frame late, no longer moves the next generated frame by
+        // a whole vblank. SHADPS4_FG_PACING=vblank: the last interval in whole vblanks, as before.
+        static const bool whole_vblanks = [] {
+            const char* value = std::getenv("SHADPS4_FG_PACING");
+            return value != nullptr && std::string_view(value) == "vblank";
+        }();
+        const float vblank_ms = std::chrono::duration<float, std::milli>(vblank).count();
+        const float since_ms = std::clamp(std::chrono::duration<float, std::milli>(since_last).count(),
+                                          vblank_ms, vblank_ms * 4.0f);
+        if (reset || smoothed_frame_ms <= 0.0f) {
+            smoothed_frame_ms = since_ms;
+        } else {
+            smoothed_frame_ms += (since_ms - smoothed_frame_ms) * 0.1f;
+        }
+        const float frame_ms = whole_vblanks ? vblank_ms * static_cast<float>(periods) : smoothed_frame_ms;
+        generated_texture = frame_gen_pass.Render(cmdbuf, frame->image, {frame->width, frame->height},
+                                                  frame->is_hdr, frame_ms, reset);
+        held_due = now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                             std::chrono::duration<float, std::milli>(frame_ms * 0.5f));
     }
     const bool generated = generated_texture.has_value();
 
