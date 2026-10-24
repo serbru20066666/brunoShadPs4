@@ -866,26 +866,14 @@ void Launch(char* executableName, bool sameProcess) {
         }
         const char* add_label = single_game.active ? Tr("Game folder") : Tr("Add games");
         {
-            // A game's own launcher has its settings on its page: only the folder button.
+            // Only the folder button: settings belong to each game (its card's Settings button,
+            // for the games this emulator runs; the others are set in their own program).
             const float width =
-                single_game.active
-                    ? ImGui::CalcTextSize(add_label).x + ImGui::GetStyle().FramePadding.x * 2.0f
-                    : ImGui::CalcTextSize(add_label).x + ImGui::CalcTextSize(Tr("Settings")).x +
-                          ImGui::GetStyle().FramePadding.x * 4.0f +
-                          ImGui::GetStyle().ItemSpacing.x;
+                ImGui::CalcTextSize(add_label).x + ImGui::GetStyle().FramePadding.x * 2.0f;
             ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - width);
         }
         if (ImGui::Button(add_label)) {
             ImGuiEmuSettings::SettingsWindow::RequestGamesFolder();
-        }
-        if (!single_game.active) {
-            ImGui::SameLine();
-        }
-        if (!single_game.active && ImGui::Button(Tr("Settings"))) {
-            EmulatorSettings.SetBigPictureScale(static_cast<int>(uiScale * 1000));
-            EmulatorSettings.Save();
-            settingsWindow.Prepare();
-            showSettings = true;
         }
 
         ImGui::Dummy(ImVec2(0.0f, 8.f * uiScale));
