@@ -68,7 +68,7 @@ void ParseLine(const std::string& line, std::map<std::string, Engine>& table) {
 std::map<std::string, Engine> LoadTable(const std::filesystem::path& folder) {
     std::map<std::string, Engine> table;
     ParseLine(R"(CUSA01623,CUSA01715 = spartanport | motores\SpartanPort\SpartanPort.exe)", table);
-    ParseLine(R"(CUSA00004,CUSA00223 = shadps4-release | motores\inFamous\shadPS4.exe)", table);
+    ParseLine(R"(CUSA00004,CUSA00223 = issn | motores\issn\inFAMOUS Second Son.exe)", table);
     ParseLine(R"(CUSA02320,CUSA02343,CUSA02344 = uncharted | motores\Uncharted\Uncharted Launcher.exe)",
               table);
     std::ifstream in{folder / "motores.ini"};
@@ -100,11 +100,11 @@ bool SetGameDir(const std::filesystem::path& settings_path, const std::filesyste
     return WriteText(settings_path, settings.dump(2));
 }
 
-/// The Uncharted collection's launcher keeps its settings in the user's AppData.
-std::filesystem::path UnchartedSettings() {
+/// A launcher's settings file in the user's AppData (the Uncharted collection's and issn_pc's).
+std::filesystem::path AppDataFile(const std::filesystem::path& relative) {
 #ifdef _WIN32
     if (const wchar_t* appdata = _wgetenv(L"APPDATA"); appdata && *appdata) {
-        return std::filesystem::path{appdata} / "Uncharted Launcher" / "launcher.json";
+        return std::filesystem::path{appdata} / relative;
     }
 #endif
     return {};
@@ -172,8 +172,15 @@ bool LaunchExternalEngine(const std::string& serial, const std::filesystem::path
             LOG_ERROR(Common, "Could not write shadps4-game.txt");
             return false;
         }
+    } else if (engine.kind == "issn") {
+        const auto settings = AppDataFile("issn-launcher/settings.json");
+        if (settings.empty() || !SetGameDir(settings, eboot)) {
+            LOG_ERROR(Common, "Could not write issn_pc's settings.json");
+            return false;
+        }
+        args.emplace_back("--play");
     } else if (engine.kind == "uncharted") {
-        const auto settings = UnchartedSettings();
+        const auto settings = AppDataFile("Uncharted Launcher/launcher.json");
         if (settings.empty() || !SetGameDir(settings, eboot)) {
             LOG_ERROR(Common, "Could not write the Uncharted launcher's settings");
             return false;

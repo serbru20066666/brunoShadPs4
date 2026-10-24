@@ -13,10 +13,11 @@ namespace Common {
 /// there, it is started instead and this process should end. Built in (paths relative to the
 /// executable's folder; motores.ini replaces them line by line):
 ///   CUSA01623,CUSA01715 = spartanport | motores\SpartanPort\SpartanPort.exe
-///   CUSA00004,CUSA00223 = shadps4-release | motores\inFamous\shadPS4.exe
+///   CUSA00004,CUSA00223 = issn | motores\issn\inFAMOUS Second Son.exe
 ///   CUSA02320,CUSA02343,CUSA02344 = uncharted | motores\Uncharted\Uncharted Launcher.exe
 /// Kinds:
 ///   spartanport      writes the game folder into the program's settings.json, runs it with --play
+///   issn             the same launcher with its settings in %APPDATA%\issn-launcher\settings.json
 ///   shadps4-release  writes the eboot path into shadps4-game.txt beside it, runs it with no arguments
 ///   shadps4          runs it with --game <eboot>
 ///   uncharted        writes the game folder into %APPDATA%\Uncharted Launcher\launcher.json and
