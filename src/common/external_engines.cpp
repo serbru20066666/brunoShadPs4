@@ -539,6 +539,31 @@ std::string ReadKeyValue(const std::filesystem::path& path, const std::string& k
 
 constexpr std::array<const char*, 3> Resolutions{"1080p", "1440p", "4K"};
 
+/// Going back from a choice screen: to this emulator's launcher when the game was started from it
+/// (it sets BRUNO_FROM_LAUNCHER), otherwise back to whatever started this process (RetroBat).
+bool WentBack(const std::string& serial) {
+    LOG_INFO(Common, "{}: the player went back before playing", serial);
+#ifdef _WIN32
+    const char* from = std::getenv("BRUNO_FROM_LAUNCHER");
+    if (from && from[0] == '1') {
+        SetEnvironmentVariableW(L"BRUNO_FROM_LAUNCHER", nullptr);
+        wchar_t path[MAX_PATH]{};
+        GetModuleFileNameW(nullptr, path, MAX_PATH);
+        std::wstring cmdline = L"\"" + std::wstring{path} + L"\"";
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+        if (CreateProcessW(path, cmdline.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
+                           nullptr, &si, &pi)) {
+            AllowSetForegroundWindow(pi.dwProcessId);
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+        }
+    }
+#endif
+    return true;
+}
+
 #ifdef _WIN32
 /// Brings a window to the front even when Windows would refuse it (a process started by another
 /// one that has just ended, as this one is when the launcher or RetroBat starts it).
@@ -852,8 +877,7 @@ bool LaunchExternalEngine(const std::string& serial, const std::string& title,
         const auto choice = ChooseResolution(title.empty() ? serial : title,
                                              ExternalEngineResolution(serial));
         if (!choice) {
-            LOG_INFO(Common, "{}: the player went back before playing", serial);
-            return true;
+            return WentBack(serial);
         }
         const auto ini = program_folder / "spartanport.ini";
         SetKeyValue(ini, "render_resolution", *choice == "1080p" ? "native" : *choice);
@@ -870,8 +894,7 @@ bool LaunchExternalEngine(const std::string& serial, const std::string& title,
         const auto choice = ChooseResolution(title.empty() ? serial : title,
                                              ExternalEngineResolution(serial));
         if (!choice) {
-            LOG_INFO(Common, "{}: the player went back before playing", serial);
-            return true;
+            return WentBack(serial);
         }
         SetKeyValue(program_folder / "shadps4-flags-user.txt", "SHADPS4_RENDER_HEIGHT",
                     *choice == "4K" ? "2160" : *choice == "1440p" ? "1440" : "1080");
@@ -909,8 +932,7 @@ bool LaunchExternalEngine(const std::string& serial, const std::string& title,
                                               "Uncharted 3: La Traicion de Drake"},
                                              game);
             if (!picked) {
-                LOG_INFO(Common, "{}: the player went back before playing", serial);
-                return true;
+                return WentBack(serial);
             }
             game = *picked;
             config["game"] = keys[game];

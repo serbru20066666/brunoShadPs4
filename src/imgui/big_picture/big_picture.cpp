@@ -1062,6 +1062,10 @@ void Launch(char* executableName, bool sameProcess) {
             // previous Run() and can hold up this process's exit for no reason, which on macOS
             // left this window appearing frozen while the next process compiled its first
             // shaders and crowded this one off the CPU.
+            // Going back from the game's choice screen returns here (external_engines.cpp).
+#ifdef _WIN32
+            _putenv_s("BRUNO_FROM_LAUNCHER", "1");
+#endif
             Core::RelaunchProcess(executableName, std::move(args));
         }
     }
