@@ -49,7 +49,8 @@ inline void Push(float scale) {
     color(ImGuiCol_CheckMark, Accent);
     color(ImGuiCol_SliderGrab, Accent);
     color(ImGuiCol_SliderGrabActive, AccentHovered);
-    color(ImGuiCol_NavCursor, Accent);
+    // White: the accent ring vanished around the accent-filled Play buttons.
+    color(ImGuiCol_NavCursor, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 24.0f * scale);
@@ -74,6 +75,32 @@ inline void Pop() {
     ImGui::PopStyleColor(26);
 }
 
+/// Around the last item while it has the focus (moved to with the pad or the keyboard): a thick
+/// white ring, and a light flash while it is held down, so a pad player sees where they are and
+/// that the press was taken.
+inline void FocusRing() {
+    if (!ImGui::IsItemFocused()) {
+        return;
+    }
+    const float s = ImGui::GetFontSize() / 20.0f;
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    const ImVec2 pad{4.0f * s, 4.0f * s};
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    if (ImGui::IsItemActive()) {
+        draw->AddRectFilled(min, max, IM_COL32(255, 255, 255, 70), 100.0f * s);
+    }
+    draw->AddRect(ImVec2(min.x - pad.x, min.y - pad.y), ImVec2(max.x + pad.x, max.y + pad.y),
+                  IM_COL32(255, 255, 255, 255), 100.0f * s, 0, 3.5f * s);
+}
+
+/// A pill button with the focus ring.
+inline bool Button(const char* label) {
+    const bool pressed = ImGui::Button(label);
+    FocusRing();
+    return pressed;
+}
+
 /// A pill button filled with the accent colour, for the main action of a screen.
 inline bool AccentButton(const char* label) {
     ImGui::PushStyleColor(ImGuiCol_Button, Accent);
@@ -82,6 +109,7 @@ inline bool AccentButton(const char* label) {
     ImGui::PushStyleColor(ImGuiCol_Text, OnAccent);
     const bool pressed = ImGui::Button(label);
     ImGui::PopStyleColor(4);
+    FocusRing();
     return pressed;
 }
 

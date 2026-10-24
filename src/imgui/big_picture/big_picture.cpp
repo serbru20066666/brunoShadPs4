@@ -597,7 +597,7 @@ void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor, int& sugge
         // shows before the game).
         if (!gameIcons[i].external) {
             ImGui::SameLine(0.0f, 8.0f * uiScale);
-            if (ImGui::Button(Tr("Settings"))) {
+            if (Theme::Button(Tr("Settings"))) {
                 settingsFor = i;
             }
         }
@@ -873,7 +873,7 @@ void Launch(char* executableName, bool sameProcess) {
                 ImGui::CalcTextSize(add_label).x + ImGui::GetStyle().FramePadding.x * 2.0f;
             ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - width);
         }
-        if (ImGui::Button(add_label)) {
+        if (Theme::Button(add_label)) {
             ImGuiEmuSettings::SettingsWindow::RequestGamesFolder();
         }
 
@@ -949,7 +949,7 @@ void Launch(char* executableName, bool sameProcess) {
             ImGui::AlignTextToFramePadding();
             ImGui::TextDisabled("%s", credit);
             ImGui::SameLine();
-            if (ImGui::Button(Tr("About"))) {
+            if (Theme::Button(Tr("About"))) {
                 ImGui::OpenPopup(Tr("About brunoShadPs4"));
             }
         }
