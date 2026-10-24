@@ -539,6 +539,28 @@ std::string ReadKeyValue(const std::filesystem::path& path, const std::string& k
 
 constexpr std::array<const char*, 3> Resolutions{"1080p", "1440p", "4K"};
 
+#ifdef _WIN32
+/// Brings a window to the front even when Windows would refuse it (a process started by another
+/// one that has just ended, as this one is when the launcher or RetroBat starts it).
+void ForceForeground(HWND hwnd) {
+    const DWORD front = GetWindowThreadProcessId(GetForegroundWindow(), nullptr);
+    const DWORD own = GetCurrentThreadId();
+    // A key event lets this process set the foreground window (the usual workaround).
+    keybd_event(VK_MENU, 0, 0, 0);
+    keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
+    if (front != own) {
+        AttachThreadInput(front, own, TRUE);
+    }
+    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    SetForegroundWindow(hwnd);
+    BringWindowToTop(hwnd);
+    SetFocus(hwnd);
+    if (front != own) {
+        AttachThreadInput(front, own, FALSE);
+    }
+}
+#endif
+
 /// A screen before the game to choose one of a few options (its resolution, a game of a
 /// collection), with the pad (D-pad, cross to accept, circle to go back), the keyboard or the mouse:
 /// front ends such as RetroBat start the game directly, without this emulator's launcher. Returns
@@ -546,6 +568,8 @@ constexpr std::array<const char*, 3> Resolutions{"1080p", "1440p", "4K"};
 std::optional<int> ChooseOption(const std::string& title, const std::string& subtitle,
                                 const std::vector<std::string>& labels, int selected) {
     const int n = static_cast<int>(labels.size());
+    // The pad answers even while another window has the focus.
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         return selected;
     }
@@ -570,6 +594,14 @@ std::optional<int> ChooseOption(const std::string& title, const std::string& sub
         return selected;
     }
     SDL_RaiseWindow(window);
+#ifdef _WIN32
+    HWND hwnd = static_cast<HWND>(SDL_GetPointerProperty(
+        SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
+    if (hwnd) {
+        ForceForeground(hwnd);
+    }
+    int frames = 0;
+#endif
     // The debug font has ASCII only.
     std::string ascii_title;
     for (const char c : title) {
@@ -586,9 +618,20 @@ std::optional<int> ChooseOption(const std::string& title, const std::string& sub
     std::optional<int> result;
     bool done = false;
     int last_axis = 0;
+    // The press that started the game (in the launcher) must not also choose here.
+    const Uint64 opened = SDL_GetTicks();
     while (!done) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
+            const bool settling = SDL_GetTicks() - opened < 500;
+            if (settling && (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ||
+                             e.type == SDL_EVENT_KEY_DOWN ||
+                             e.type == SDL_EVENT_MOUSE_BUTTON_DOWN)) {
+                continue;
+            }
+            if (e.type == SDL_EVENT_KEY_DOWN && e.key.repeat) {
+                continue;
+            }
             if (e.type == SDL_EVENT_QUIT) {
                 done = true;
             } else if (e.type == SDL_EVENT_GAMEPAD_ADDED) {
@@ -657,6 +700,12 @@ std::optional<int> ChooseOption(const std::string& title, const std::string& sub
         }
         text(80, height - 60.0f, 2.0f, "Cruceta: elegir     X: aceptar     O: volver", 150, 155, 175);
         SDL_RenderPresent(renderer);
+#ifdef _WIN32
+        // Again during the first second, in case something took the front back.
+        if (hwnd && ++frames < 60 && GetForegroundWindow() != hwnd) {
+            ForceForeground(hwnd);
+        }
+#endif
         SDL_Delay(16);
     }
     for (SDL_Gamepad* pad : pads) {
@@ -785,6 +834,13 @@ bool LaunchExternalEngine(const std::string& serial, const std::string& title,
     const auto& [engine, program] = *found;
     const auto program_folder = program.parent_path();
     std::vector<std::string> args;
+#ifdef _WIN32
+    // This process only hands the game over: its console window has nothing to show.
+    if (HWND console = GetConsoleWindow()) {
+        ShowWindow(console, SW_HIDE);
+    }
+    FreeConsole(); // a console hosted by Windows Terminal ignores the hide
+#endif
     if (engine.kind == "spartanport") {
         // SpartanPort keeps its options in settings.json beside it.
         if (!SetGameDir(program_folder / "settings.json", eboot)) {

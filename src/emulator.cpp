@@ -832,7 +832,9 @@ void Emulator::Restart(std::filesystem::path eboot_path,
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
-    bool success = CreateProcessW(executable.c_str(), cmdline.data(), nullptr, nullptr, TRUE, 0,
+    // No console window for the game: its log is in the log folder.
+    bool success = CreateProcessW(executable.c_str(), cmdline.data(), nullptr, nullptr, TRUE,
+                                  CREATE_NO_WINDOW,
                                   nullptr, nullptr, &si, &pi);
 
     if (!success) {
