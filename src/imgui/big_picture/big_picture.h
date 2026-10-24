@@ -23,6 +23,8 @@ struct IconInfo {
     /// What the card says under the name: the size and the way the game will be shown, its
     /// language, and how much and when it was played.
     std::array<std::string, 7> details;
+    /// Runs on another program (motores.ini): its settings are that program's, not this one's.
+    bool external{};
 };
 
 void Launch(char* executableName, bool sameProcess);

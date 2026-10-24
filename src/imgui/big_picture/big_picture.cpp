@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 #include <stb_image.h>
 
+#include "common/external_engines.h"
 #include "common/game_edition.h"
 #include "common/logging/log.h"
 #include "common/path_util.h"
@@ -447,6 +448,15 @@ void FillGameDetails(std::vector<IconInfo>& icons) {
             icon.details[3].clear();
             icon.details[4].clear();
         }
+        // A game that runs on another program shows that program and its settings.
+        icon.external = false;
+        if (const auto other = Common::DescribeExternalEngine(icon.serial)) {
+            icon.external = true;
+            icon.details[0] = "Motor: " + other->engine;
+            for (size_t k = 0; k < other->details.size(); ++k) {
+                icon.details[k + 1] = other->details[k];
+            }
+        }
         icon.details[5] = Tr("Not played yet");
         icon.details[6].clear();
     }
@@ -583,9 +593,12 @@ void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor, int& sugge
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
                             ImVec2(16.0f * uiScale, ImGui::GetStyle().FramePadding.y));
         play |= Theme::AccentButton(Tr("Play"));
-        ImGui::SameLine(0.0f, 8.0f * uiScale);
-        if (ImGui::Button(Tr("Settings"))) {
-            settingsFor = i;
+        // The settings of a game on another program are in that program.
+        if (!gameIcons[i].external) {
+            ImGui::SameLine(0.0f, 8.0f * uiScale);
+            if (ImGui::Button(Tr("Settings"))) {
+                settingsFor = i;
+            }
         }
         ImGui::PopStyleVar();
 
@@ -774,12 +787,30 @@ void Launch(char* executableName, bool sameProcess) {
 
     ImGuiEmuSettings::SettingsWindow settingsWindow(false);
 
-    float sliderScale = 1.0f;
+    // The window takes the size its cards need (up to four in a row), scaled to fit the display.
+    auto fitWindow = [&] {
+        const int count = std::max(1, static_cast<int>(gameIcons.size()));
+        const int cols = std::min(count, 4);
+        const int rows = (count + cols - 1) / cols;
+        const float want_w = 140.0f + cols * (gameImageSize + 80.0f);
+        const float want_h = 290.0f + rows * 660.0f;
+        SDL_Rect usable{};
+        if (!SDL_GetDisplayUsableBounds(SDL_GetDisplayForWindow(window), &usable) ||
+            usable.w <= 0 || usable.h <= 0) {
+            usable = {0, 0, 1920, 1040};
+        }
+        uiScale = std::clamp(std::min({1.25f, usable.w * 0.92f / want_w, usable.h * 0.9f / want_h}),
+                             0.6f, 1.25f);
+        SDL_SetWindowSize(window, static_cast<int>(want_w * uiScale),
+                          static_cast<int>(want_h * uiScale));
+        SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    };
     auto applySettings = [&] {
-        uiScale = std::clamp(EmulatorSettings.GetBigPictureScale() / 1000.f, 0.75f, 1.5f);
-        sliderScale = uiScale;
         GetGameIconInfo(gameIcons);
         // The launcher always stays in a window; the full screen setting is for the games.
+        if (!single_game.active) {
+            fitWindow();
+        }
     };
     applySettings();
     if (single_game.active) {
@@ -917,21 +948,6 @@ void Launch(char* executableName, bool sameProcess) {
             }
         }
         ImGui::EndChild();
-        if (!single_game.active) {
-            ImGui::SetNextItemWidth(150.0f * uiScale);
-            if (ImGui::IsWindowAppearing()) {
-                sliderScale = uiScale;
-            }
-            ImGui::SliderFloat("##scale", &sliderScale, 0.75f, 1.5f, "");
-            // Only apply the size once the slider is released, so it does not move under the
-            // mouse.
-            if (ImGui::IsItemDeactivatedAfterEdit()) {
-                uiScale = sliderScale;
-            }
-            ImGui::SameLine();
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextDisabled(Tr("Size"));
-        }
 
         // Whose work this is.
         {
@@ -940,9 +956,6 @@ void Launch(char* executableName, bool sameProcess) {
             const float width = ImGui::CalcTextSize(credit).x + ImGui::CalcTextSize(Tr("About")).x +
                                 ImGui::GetStyle().FramePadding.x * 2.0f +
                                 ImGui::GetStyle().ItemSpacing.x;
-            if (!single_game.active) {
-                ImGui::SameLine();
-            }
             ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - width);
             ImGui::AlignTextToFramePadding();
             ImGui::TextDisabled("%s", credit);

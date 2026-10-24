@@ -441,11 +441,15 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
         }
     }
 
-    // Games that run better on another program (motores.ini): started there, this one ends.
-    if (Common::LaunchExternalEngine(id, file)) {
+    // Games that run better on another program (motores.ini): started there; this process waits
+    // until the game ends (front ends wait for it) and counts the time played.
+    start_time = std::chrono::steady_clock::now();
+    if (Common::LaunchExternalEngine(id, title, file)) {
+        UpdatePlayTime(id);
         Common::Log::Shutdown();
         std::_Exit(0);
     }
+    start_time = {};
 
     EmulatorSettings.Load(id);
     // Switch to configured log
