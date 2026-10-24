@@ -636,7 +636,8 @@ static bool ImGui_ImplSDL3_Init(SDL_Window* window, SDL_Renderer* renderer, void
     ImGui_ImplSDL3_UpdateMonitors();
 
     // Gamepad handling
-    bd->GamepadMode = ImGui_ImplSDL3_GamepadMode_AutoFirst;
+    // brunoShadPs4: every pad, not just the first one found (a DualSense next to an Xbox pad).
+    bd->GamepadMode = ImGui_ImplSDL3_GamepadMode_AutoAll;
     bd->WantUpdateGamepadsList = true;
 
     // Load mouse cursors
