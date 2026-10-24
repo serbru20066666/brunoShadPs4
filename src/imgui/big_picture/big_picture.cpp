@@ -593,7 +593,8 @@ void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor, int& sugge
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
                             ImVec2(16.0f * uiScale, ImGui::GetStyle().FramePadding.y));
         play |= Theme::AccentButton(Tr("Play"));
-        // The settings of a game on another program are in that program.
+        // The settings of a game on another program are in that program (or on the screen it
+        // shows before the game).
         if (!gameIcons[i].external) {
             ImGui::SameLine(0.0f, 8.0f * uiScale);
             if (ImGui::Button(Tr("Settings"))) {

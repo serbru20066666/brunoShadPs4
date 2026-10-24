@@ -7,6 +7,7 @@
 #include <regex>
 #include <sstream>
 #include <vector>
+#include <SDL3/SDL.h>
 #include <nlohmann/json.hpp>
 
 #include "common/external_engines.h"
@@ -71,7 +72,7 @@ void ParseLine(const std::string& line, std::map<std::string, Engine>& table) {
 std::map<std::string, Engine> LoadTable(const std::filesystem::path& folder) {
     std::map<std::string, Engine> table;
     ParseLine(R"(CUSA01623,CUSA01715 = spartanport | motores\SpartanPort\SpartanPort.exe)", table);
-    ParseLine(R"(CUSA00004,CUSA00223 = issn | motores\issn\inFAMOUS Second Son.exe)", table);
+    ParseLine(R"(CUSA00004,CUSA00223 = shadps4-release | motores\inFamous\shadPS4.exe)", table);
     ParseLine(R"(CUSA02320,CUSA02343,CUSA02344 = uncharted | motores\Uncharted\Uncharted Launcher.exe)",
               table);
     std::ifstream in{folder / "motores.ini"};
@@ -201,6 +202,38 @@ std::array<std::string, 4> LastRunDetails(const std::filesystem::path& folder) {
     details[1] = window.empty() ? "" : (mode != modes.end() ? mode->second : window);
     details[2] = fps.empty() ? "" : "Cuadros: " + fps;
     details[3] = vsync;
+    return details;
+}
+
+/// A shadPS4 release build (shadps4-flags*.txt beside it): its render height and display mode.
+std::array<std::string, 4> ReleaseBuildDetails(const std::filesystem::path& folder) {
+    std::array<std::string, 4> details{};
+    std::string height;
+    for (const char* name : {"shadps4-flags.txt", "shadps4-flags-user.txt"}) {
+        std::ifstream in{folder / name};
+        std::string line;
+        while (in && std::getline(in, line)) {
+            line = Trim(line);
+            if (line.starts_with("SHADPS4_RENDER_HEIGHT=")) {
+                height = line.substr(22);
+            }
+        }
+    }
+    const std::map<std::string, std::string> sizes{
+        {"2160", "3840 x 2160 (4K)"}, {"1440", "2560 x 1440"}, {"1080", "1920 x 1080"}};
+    const auto size = sizes.find(height);
+    details[0] = "Resolución: " + (size != sizes.end() ? size->second
+                                   : height.empty()    ? std::string{"1920 x 1080"}
+                                                       : height + " líneas");
+    bool full = false;
+    for (const char* name : {"user/config.json", "user/custom_configs/CUSA00004.json"}) {
+        const auto json = ReadJsonFile(folder / name);
+        if (json.contains("GPU") && json["GPU"].contains("full_screen")) {
+            full = json["GPU"]["full_screen"].get<bool>();
+        }
+    }
+    details[1] = full ? "Pantalla completa" : "En ventana";
+    details[2] = "Ajustes: en su programa (F3)";
     return details;
 }
 
@@ -457,7 +490,247 @@ bool StartAndWait(const std::filesystem::path& program, const std::vector<std::s
 }
 #endif
 
+/// Sets KEY=value in a KEY=value text file (an .ini or a flags file), keeping the other lines.
+bool SetKeyValue(const std::filesystem::path& path, const std::string& key, const std::string& value) {
+    std::vector<std::string> lines;
+    bool done = false;
+    {
+        std::ifstream in{path};
+        std::string line;
+        while (in && std::getline(in, line)) {
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            if (Trim(line).starts_with(key + "=")) {
+                line = key + "=" + value;
+                done = true;
+            }
+            lines.push_back(line);
+        }
+    }
+    if (!done) {
+        lines.push_back(key + "=" + value);
+    }
+    std::string text;
+    for (const auto& line : lines) {
+        text += line + "\n";
+    }
+    return WriteText(path, text);
+}
+
+std::string ReadKeyValue(const std::filesystem::path& path, const std::string& key) {
+    std::ifstream in{path};
+    std::string line, value;
+    while (in && std::getline(in, line)) {
+        line = Trim(line);
+        if (line.starts_with(key + "=")) {
+            value = Trim(line.substr(key.size() + 1));
+        }
+    }
+    return value;
+}
+
+constexpr std::array<const char*, 3> Resolutions{"1080p", "1440p", "4K"};
+
+/// A screen before the game to choose its resolution, with the pad (D-pad, cross to play, circle to
+/// go back), the keyboard or the mouse: front ends such as RetroBat start the game directly, without
+/// this emulator's launcher. Returns the choice, or nothing when the player went back.
+std::optional<std::string> ChooseResolution(const std::string& title, const std::string& current) {
+    if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
+        return current;
+    }
+    std::vector<SDL_Gamepad*> pads;
+    int count = 0;
+    if (SDL_JoystickID* ids = SDL_GetGamepads(&count)) {
+        for (int i = 0; i < count; ++i) {
+            if (SDL_Gamepad* pad = SDL_OpenGamepad(ids[i])) {
+                pads.push_back(pad);
+            }
+        }
+        SDL_free(ids);
+    }
+    const int width = 1100, height = 620;
+    SDL_Window* window = SDL_CreateWindow("brunoShadPs4", width, height, SDL_WINDOW_BORDERLESS);
+    SDL_Renderer* renderer = window ? SDL_CreateRenderer(window, nullptr) : nullptr;
+    if (!renderer) {
+        if (window) {
+            SDL_DestroyWindow(window);
+        }
+        SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD);
+        return current;
+    }
+    SDL_RaiseWindow(window);
+    const std::array<const char*, 3> labels{"1080p   (1920 x 1080)", "1440p   (2560 x 1440, 2K)",
+                                            "4K      (3840 x 2160)"};
+    int selected = 0;
+    for (int i = 0; i < 3; ++i) {
+        if (current == Resolutions[i]) {
+            selected = i;
+        }
+    }
+    // The debug font has ASCII only.
+    std::string ascii_title;
+    for (const char c : title) {
+        if (static_cast<unsigned char>(c) < 128) {
+            ascii_title += c;
+        }
+    }
+    const auto text = [&](float x, float y, float scale, const char* s, Uint8 r, Uint8 g, Uint8 b) {
+        SDL_SetRenderScale(renderer, scale, scale);
+        SDL_SetRenderDrawColor(renderer, r, g, b, 255);
+        SDL_RenderDebugText(renderer, x / scale, y / scale, s);
+        SDL_SetRenderScale(renderer, 1.0f, 1.0f);
+    };
+    std::optional<std::string> result;
+    bool done = false;
+    int last_axis = 0;
+    while (!done) {
+        SDL_Event e;
+        while (SDL_PollEvent(&e)) {
+            if (e.type == SDL_EVENT_QUIT) {
+                done = true;
+            } else if (e.type == SDL_EVENT_GAMEPAD_ADDED) {
+                if (SDL_Gamepad* pad = SDL_OpenGamepad(e.gdevice.which)) {
+                    pads.push_back(pad);
+                }
+            } else if (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+                switch (e.gbutton.button) {
+                case SDL_GAMEPAD_BUTTON_DPAD_UP:
+                case SDL_GAMEPAD_BUTTON_DPAD_LEFT:
+                    selected = (selected + 2) % 3;
+                    break;
+                case SDL_GAMEPAD_BUTTON_DPAD_DOWN:
+                case SDL_GAMEPAD_BUTTON_DPAD_RIGHT:
+                    selected = (selected + 1) % 3;
+                    break;
+                case SDL_GAMEPAD_BUTTON_SOUTH:
+                case SDL_GAMEPAD_BUTTON_START:
+                    result = Resolutions[selected];
+                    done = true;
+                    break;
+                case SDL_GAMEPAD_BUTTON_EAST:
+                case SDL_GAMEPAD_BUTTON_BACK:
+                    done = true;
+                    break;
+                default:
+                    break;
+                }
+            } else if (e.type == SDL_EVENT_GAMEPAD_AXIS_MOTION &&
+                       e.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTY) {
+                const int dir = e.gaxis.value > 20000 ? 1 : e.gaxis.value < -20000 ? -1 : 0;
+                if (dir != 0 && dir != last_axis) {
+                    selected = (selected + 3 + dir) % 3;
+                }
+                last_axis = dir;
+            } else if (e.type == SDL_EVENT_KEY_DOWN) {
+                if (e.key.key == SDLK_UP || e.key.key == SDLK_LEFT) {
+                    selected = (selected + 2) % 3;
+                } else if (e.key.key == SDLK_DOWN || e.key.key == SDLK_RIGHT) {
+                    selected = (selected + 1) % 3;
+                } else if (e.key.key == SDLK_RETURN || e.key.key == SDLK_SPACE) {
+                    result = Resolutions[selected];
+                    done = true;
+                } else if (e.key.key == SDLK_ESCAPE) {
+                    done = true;
+                }
+            } else if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+                const int row = static_cast<int>((e.button.y - 200.0f) / 110.0f);
+                if (e.button.y >= 200.0f && row < 3 && e.button.x > 80 && e.button.x < width - 80) {
+                    selected = row;
+                    result = Resolutions[selected];
+                    done = true;
+                }
+            }
+        }
+        SDL_SetRenderDrawColor(renderer, 14, 14, 20, 255);
+        SDL_RenderClear(renderer);
+        text(80, 50, 4.0f, ascii_title.c_str(), 245, 245, 250);
+        text(80, 120, 2.5f, "Elige la resolucion", 160, 168, 190);
+        for (int i = 0; i < 3; ++i) {
+            const SDL_FRect box{80.0f, 200.0f + i * 110.0f, width - 160.0f, 90.0f};
+            const bool on = i == selected;
+            SDL_SetRenderDrawColor(renderer, on ? 40 : 30, on ? 120 : 32, on ? 255 : 44, 255);
+            SDL_RenderFillRect(renderer, &box);
+            text(box.x + 30, box.y + 30, 3.5f, labels[i], 255, 255, 255);
+        }
+        text(80, height - 60.0f, 2.0f, "Cruceta: elegir     X: jugar     O: volver", 150, 155, 175);
+        SDL_RenderPresent(renderer);
+        SDL_Delay(16);
+    }
+    for (SDL_Gamepad* pad : pads) {
+        SDL_CloseGamepad(pad);
+    }
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD);
+    return result;
+}
+
 } // namespace
+
+std::string ExternalEngineResolution(const std::string& serial) {
+    const auto found = FindEngine(serial);
+    if (!found) {
+        return {};
+    }
+    const auto& [engine, program] = *found;
+    const auto folder = program.parent_path();
+    if (engine.kind == "shadps4-release") {
+        const auto height = ReadKeyValue(folder / "shadps4-flags-user.txt", "SHADPS4_RENDER_HEIGHT");
+        return height == "2160" ? "4K" : height == "1440" ? "1440p" : "1080p";
+    }
+    if (engine.kind == "spartanport") {
+        const auto res = ReadKeyValue(folder / "spartanport.ini", "render_resolution");
+        return res == "4K" ? "4K" : res == "1440p" ? "1440p" : "1080p";
+    }
+    if (engine.kind == "uncharted") {
+        const auto config = ReadJsonFile(AppDataFile("Uncharted Launcher/launcher.json"));
+        const std::string game = config.value("game", std::string{"u1"});
+        std::string res = "1920x1080";
+        if (config.contains("games") && config["games"].contains(game)) {
+            res = config["games"][game].value("resolution", res);
+        }
+        return res == "3840x2160" ? "4K" : res == "2560x1440" ? "1440p" : "1080p";
+    }
+    return {};
+}
+
+std::string CycleExternalEngineResolution(const std::string& serial) {
+    const auto current = ExternalEngineResolution(serial);
+    if (current.empty()) {
+        return {};
+    }
+    size_t index = 0;
+    while (index < Resolutions.size() && current != Resolutions[index]) {
+        ++index;
+    }
+    const std::string next = Resolutions[(index + 1) % Resolutions.size()];
+    const auto& [engine, program] = *FindEngine(serial);
+    const auto folder = program.parent_path();
+    if (engine.kind == "shadps4-release") {
+        SetKeyValue(folder / "shadps4-flags-user.txt", "SHADPS4_RENDER_HEIGHT",
+                    next == "4K" ? "2160" : next == "1440p" ? "1440" : "1080");
+    } else if (engine.kind == "spartanport") {
+        const auto ini = folder / "spartanport.ini";
+        SetKeyValue(ini, "render_resolution", next == "1080p" ? "native" : next);
+        SetKeyValue(ini, "output_res", next == "4K" ? "3840x2160" : next == "1440p" ? "2560x1440"
+                                                                                   : "1920x1080");
+    } else if (engine.kind == "uncharted") {
+        const auto path = AppDataFile("Uncharted Launcher/launcher.json");
+        auto config = ReadJsonFile(path);
+        const std::string res =
+            next == "4K" ? "3840x2160" : next == "1440p" ? "2560x1440" : "1920x1080";
+        if (config.contains("games") && config["games"].is_object()) {
+            for (auto& [key, game] : config["games"].items()) {
+                if (game.is_object()) {
+                    game["resolution"] = res;
+                }
+            }
+        }
+        WriteText(path, config.dump(2));
+    }
+    return next;
+}
 
 std::optional<ExternalEngineCard> DescribeExternalEngine(const std::string& serial) {
     const auto found = FindEngine(serial);
@@ -472,6 +745,8 @@ std::optional<ExternalEngineCard> DescribeExternalEngine(const std::string& seri
         card.details = LastRunDetails(program.parent_path());
     } else if (engine.kind == "uncharted") {
         card.details = UnchartedDetails();
+    } else if (engine.kind == "shadps4-release") {
+        card.details = ReleaseBuildDetails(program.parent_path());
     } else {
         card.details[0] = "Ajustes: en su propio programa";
     }
@@ -496,8 +771,16 @@ bool LaunchExternalEngine(const std::string& serial, const std::string& title,
             LOG_ERROR(Common, "Could not write SpartanPort's settings.json");
             return false;
         }
-        args.emplace_back("--play");
+        // Its launcher opens, to set the game up before playing (the pad works there).
     } else if (engine.kind == "shadps4-release") {
+        const auto choice = ChooseResolution(title.empty() ? serial : title,
+                                             ExternalEngineResolution(serial));
+        if (!choice) {
+            LOG_INFO(Common, "{}: the player went back before playing", serial);
+            return true;
+        }
+        SetKeyValue(program_folder / "shadps4-flags-user.txt", "SHADPS4_RENDER_HEIGHT",
+                    *choice == "4K" ? "2160" : *choice == "1440p" ? "1440" : "1080");
         if (!WriteText(program_folder / "shadps4-game.txt", FS::PathToUTF8String(eboot) + "\n")) {
             LOG_ERROR(Common, "Could not write shadps4-game.txt");
             return false;
@@ -508,7 +791,6 @@ bool LaunchExternalEngine(const std::string& serial, const std::string& title,
             LOG_ERROR(Common, "Could not write issn_pc's settings.json");
             return false;
         }
-        args.emplace_back("--play");
     } else if (engine.kind == "uncharted") {
         const auto settings = AppDataFile("Uncharted Launcher/launcher.json");
         if (settings.empty() || !SetGameDir(settings, eboot)) {
