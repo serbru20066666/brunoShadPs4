@@ -431,6 +431,13 @@ bool StartAndWait(const std::filesystem::path& program, const std::vector<std::s
         cmdline += L" \"" + std::filesystem::path{arg}.wstring() + L"\"";
     }
     HANDLE job = CreateJobObjectW(nullptr, nullptr);
+    if (job) {
+        // When this process ends, by itself or because a front end closed it (RetroBat's Select +
+        // Start closes the program it started, which is this one), the game goes with it.
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
+    }
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
@@ -532,12 +539,15 @@ std::string ReadKeyValue(const std::filesystem::path& path, const std::string& k
 
 constexpr std::array<const char*, 3> Resolutions{"1080p", "1440p", "4K"};
 
-/// A screen before the game to choose its resolution, with the pad (D-pad, cross to play, circle to
-/// go back), the keyboard or the mouse: front ends such as RetroBat start the game directly, without
-/// this emulator's launcher. Returns the choice, or nothing when the player went back.
-std::optional<std::string> ChooseResolution(const std::string& title, const std::string& current) {
+/// A screen before the game to choose one of a few options (its resolution, a game of a
+/// collection), with the pad (D-pad, cross to accept, circle to go back), the keyboard or the mouse:
+/// front ends such as RetroBat start the game directly, without this emulator's launcher. Returns
+/// the chosen index, or nothing when the player went back.
+std::optional<int> ChooseOption(const std::string& title, const std::string& subtitle,
+                                const std::vector<std::string>& labels, int selected) {
+    const int n = static_cast<int>(labels.size());
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
-        return current;
+        return selected;
     }
     std::vector<SDL_Gamepad*> pads;
     int count = 0;
@@ -557,17 +567,9 @@ std::optional<std::string> ChooseResolution(const std::string& title, const std:
             SDL_DestroyWindow(window);
         }
         SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD);
-        return current;
+        return selected;
     }
     SDL_RaiseWindow(window);
-    const std::array<const char*, 3> labels{"1080p   (1920 x 1080)", "1440p   (2560 x 1440, 2K)",
-                                            "4K      (3840 x 2160)"};
-    int selected = 0;
-    for (int i = 0; i < 3; ++i) {
-        if (current == Resolutions[i]) {
-            selected = i;
-        }
-    }
     // The debug font has ASCII only.
     std::string ascii_title;
     for (const char c : title) {
@@ -581,7 +583,7 @@ std::optional<std::string> ChooseResolution(const std::string& title, const std:
         SDL_RenderDebugText(renderer, x / scale, y / scale, s);
         SDL_SetRenderScale(renderer, 1.0f, 1.0f);
     };
-    std::optional<std::string> result;
+    std::optional<int> result;
     bool done = false;
     int last_axis = 0;
     while (!done) {
@@ -597,15 +599,15 @@ std::optional<std::string> ChooseResolution(const std::string& title, const std:
                 switch (e.gbutton.button) {
                 case SDL_GAMEPAD_BUTTON_DPAD_UP:
                 case SDL_GAMEPAD_BUTTON_DPAD_LEFT:
-                    selected = (selected + 2) % 3;
+                    selected = (selected + n - 1) % n;
                     break;
                 case SDL_GAMEPAD_BUTTON_DPAD_DOWN:
                 case SDL_GAMEPAD_BUTTON_DPAD_RIGHT:
-                    selected = (selected + 1) % 3;
+                    selected = (selected + 1) % n;
                     break;
                 case SDL_GAMEPAD_BUTTON_SOUTH:
                 case SDL_GAMEPAD_BUTTON_START:
-                    result = Resolutions[selected];
+                    result = selected;
                     done = true;
                     break;
                 case SDL_GAMEPAD_BUTTON_EAST:
@@ -619,25 +621,25 @@ std::optional<std::string> ChooseResolution(const std::string& title, const std:
                        e.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTY) {
                 const int dir = e.gaxis.value > 20000 ? 1 : e.gaxis.value < -20000 ? -1 : 0;
                 if (dir != 0 && dir != last_axis) {
-                    selected = (selected + 3 + dir) % 3;
+                    selected = (selected + n + dir) % n;
                 }
                 last_axis = dir;
             } else if (e.type == SDL_EVENT_KEY_DOWN) {
                 if (e.key.key == SDLK_UP || e.key.key == SDLK_LEFT) {
-                    selected = (selected + 2) % 3;
+                    selected = (selected + n - 1) % n;
                 } else if (e.key.key == SDLK_DOWN || e.key.key == SDLK_RIGHT) {
-                    selected = (selected + 1) % 3;
+                    selected = (selected + 1) % n;
                 } else if (e.key.key == SDLK_RETURN || e.key.key == SDLK_SPACE) {
-                    result = Resolutions[selected];
+                    result = selected;
                     done = true;
                 } else if (e.key.key == SDLK_ESCAPE) {
                     done = true;
                 }
             } else if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                 const int row = static_cast<int>((e.button.y - 200.0f) / 110.0f);
-                if (e.button.y >= 200.0f && row < 3 && e.button.x > 80 && e.button.x < width - 80) {
+                if (e.button.y >= 200.0f && row < n && e.button.x > 80 && e.button.x < width - 80) {
                     selected = row;
-                    result = Resolutions[selected];
+                    result = selected;
                     done = true;
                 }
             }
@@ -645,15 +647,15 @@ std::optional<std::string> ChooseResolution(const std::string& title, const std:
         SDL_SetRenderDrawColor(renderer, 14, 14, 20, 255);
         SDL_RenderClear(renderer);
         text(80, 50, 4.0f, ascii_title.c_str(), 245, 245, 250);
-        text(80, 120, 2.5f, "Elige la resolucion", 160, 168, 190);
-        for (int i = 0; i < 3; ++i) {
+        text(80, 120, 2.5f, subtitle.c_str(), 160, 168, 190);
+        for (int i = 0; i < n; ++i) {
             const SDL_FRect box{80.0f, 200.0f + i * 110.0f, width - 160.0f, 90.0f};
             const bool on = i == selected;
             SDL_SetRenderDrawColor(renderer, on ? 40 : 30, on ? 120 : 32, on ? 255 : 44, 255);
             SDL_RenderFillRect(renderer, &box);
-            text(box.x + 30, box.y + 30, 3.5f, labels[i], 255, 255, 255);
+            text(box.x + 30, box.y + 30, 3.5f, labels[i].c_str(), 255, 255, 255);
         }
-        text(80, height - 60.0f, 2.0f, "Cruceta: elegir     X: jugar     O: volver", 150, 155, 175);
+        text(80, height - 60.0f, 2.0f, "Cruceta: elegir     X: aceptar     O: volver", 150, 155, 175);
         SDL_RenderPresent(renderer);
         SDL_Delay(16);
     }
@@ -664,6 +666,24 @@ std::optional<std::string> ChooseResolution(const std::string& title, const std:
     SDL_DestroyWindow(window);
     SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD);
     return result;
+}
+
+/// The resolution screen: "1080p", "1440p" or "4K", or nothing when the player went back.
+std::optional<std::string> ChooseResolution(const std::string& title, const std::string& current) {
+    int selected = 0;
+    for (int i = 0; i < 3; ++i) {
+        if (current == Resolutions[i]) {
+            selected = i;
+        }
+    }
+    const auto choice = ChooseOption(title, "Elige la resolucion",
+                                     {"1080p   (1920 x 1080)", "1440p   (2560 x 1440, 2K)",
+                                      "4K      (3840 x 2160)"},
+                                     selected);
+    if (!choice) {
+        return std::nullopt;
+    }
+    return std::string{Resolutions[*choice]};
 }
 
 } // namespace
@@ -771,7 +791,25 @@ bool LaunchExternalEngine(const std::string& serial, const std::string& title,
             LOG_ERROR(Common, "Could not write SpartanPort's settings.json");
             return false;
         }
-        // Its launcher opens, to set the game up before playing (the pad works there).
+        // The resolution here (the port's launcher is hard to use with a pad), the rest at the
+        // best the port offers, then straight in.
+        const auto choice = ChooseResolution(title.empty() ? serial : title,
+                                             ExternalEngineResolution(serial));
+        if (!choice) {
+            LOG_INFO(Common, "{}: the player went back before playing", serial);
+            return true;
+        }
+        const auto ini = program_folder / "spartanport.ini";
+        SetKeyValue(ini, "render_resolution", *choice == "1080p" ? "native" : *choice);
+        SetKeyValue(ini, "output_res", *choice == "4K"      ? "3840x2160"
+                                       : *choice == "1440p" ? "2560x1440"
+                                                            : "1920x1080");
+        SetKeyValue(ini, "display_mode", "fullscreen");
+        SetKeyValue(ini, "engine_fps", "144");
+        SetKeyValue(ini, "vsync", "1");
+        SetKeyValue(ini, "async_shaders", "1");
+        SetKeyValue(ini, "deferred_readback", "1");
+        args.emplace_back("--play");
     } else if (engine.kind == "shadps4-release") {
         const auto choice = ChooseResolution(title.empty() ? serial : title,
                                              ExternalEngineResolution(serial));
@@ -797,6 +835,56 @@ bool LaunchExternalEngine(const std::string& serial, const std::string& title,
             LOG_ERROR(Common, "Could not write the Uncharted launcher's settings");
             return false;
         }
+        // Three games in one: first the game, then its resolution, the rest at the port's best
+        // (its "ultra" preset), then straight in (--play u1|u2|u3).
+        auto config = ReadJsonFile(settings);
+        const std::array<const char*, 3> keys{"u1", "u2", "u3"};
+        int game = 0;
+        for (int i = 0; i < 3; ++i) {
+            if (config.value("game", std::string{"u1"}) == keys[i]) {
+                game = i;
+            }
+        }
+        const std::string name = title.empty() ? serial : title;
+        while (true) {
+            const auto picked = ChooseOption(name, "Elige el juego",
+                                             {"Uncharted: El Tesoro de Drake",
+                                              "Uncharted 2: El Reino de los Ladrones",
+                                              "Uncharted 3: La Traicion de Drake"},
+                                             game);
+            if (!picked) {
+                LOG_INFO(Common, "{}: the player went back before playing", serial);
+                return true;
+            }
+            game = *picked;
+            config["game"] = keys[game];
+            WriteText(settings, config.dump(2));
+            const auto choice = ChooseResolution(name, ExternalEngineResolution(serial));
+            if (!choice) {
+                continue; // back to the game list
+            }
+            const std::string res = *choice == "4K"      ? "3840x2160"
+                                    : *choice == "1440p" ? "2560x1440"
+                                                         : "1920x1080";
+            config = ReadJsonFile(settings);
+            config["games"][keys[game]]["resolution"] = res;
+            config["games"][keys[game]]["preset"] = "ultra";
+            WriteText(settings, config.dump(2));
+            // The rest lives in the game's own ini beside the launcher.
+            const auto ini = program_folder / "analysis" / "uncharted-user" /
+                             (std::string{"probe-"} + keys[game] + ".ini");
+            SetKeyValue(ini, "display_mode", "fullscreen");
+            SetKeyValue(ini, "fps_limit", "120");
+            SetKeyValue(ini, "frames_queued", "1");
+            SetKeyValue(ini, "vsync", "1");
+            SetKeyValue(ini, "async_shaders", "1");
+            SetKeyValue(ini, "rcas", "1");
+            SetKeyValue(ini, "rcas_strength", "50");
+            // Below 4K the picture is scaled to the screen: FSR 1 keeps it sharp.
+            SetKeyValue(ini, "fsr1", *choice == "4K" ? "0" : "1");
+            break;
+        }
+        args = {"--play", keys[game]};
     } else if (engine.kind == "shadps4") {
         args = {"--game", FS::PathToUTF8String(eboot)};
     } else {
