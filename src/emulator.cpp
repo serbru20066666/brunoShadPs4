@@ -18,6 +18,7 @@
 extern char** environ;
 #endif
 
+#include "common/external_engines.h"
 #include "common/game_edition.h"
 #include "common/debug.h"
 #include "common/logging/log.h"
@@ -438,6 +439,12 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
             // Number is stored in base 16.
             sdk_version = std::stoi(sdk_ver_string, nullptr, 16);
         }
+    }
+
+    // Games that run better on another program (motores.ini): started there, this one ends.
+    if (Common::LaunchExternalEngine(id, file)) {
+        Common::Log::Shutdown();
+        std::_Exit(0);
     }
 
     EmulatorSettings.Load(id);
