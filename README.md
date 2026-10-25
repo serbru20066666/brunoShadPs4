@@ -66,6 +66,40 @@ Probados en Windows con un i7-14700KF y una Radeon RX 6800 XT.
 * Necesita los ajustes recomendados del lanzador; sin las lecturas de la GPU se queda en negro tras el menú.
 <!-- juegos:fin -->
 
+### Un motor para cada juego (desde la 0.28.0)
+
+Algunos juegos funcionan mejor en un port o un fork hecho solo para ellos. brunoShadPs4 los abre por ti: tú eliges el juego (en el lanzador o desde un frontend como RetroBat) y el emulador lo pasa al programa que mejor lo ejecuta. Los demás juegos siguen en el motor de brunoShadPs4.
+
+<img alt="Lanzador con un motor por juego" src="documents/Screenshots/brunoShadPs4_lanzador_motores.jpg" width="800" />
+
+| Juego | Motor | Proyecto |
+|---|---|---|
+| God of War III Remastered | SpartanPort | [FelipePrado0/SpartanPort](https://github.com/FelipePrado0/SpartanPort) |
+| inFAMOUS Second Son | build de shadPS4 para inFAMOUS | [axylpup/shadPS4](https://github.com/axylpup/shadPS4) |
+| Uncharted: The Nathan Drake Collection | Uncharted PC port | [bc160201983/Uncharted-The-Nathan-Drake-Collection-PC-port](https://github.com/bc160201983/Uncharted-The-Nathan-Drake-Collection-PC-port) |
+| Bloodborne | bloodborne_pc | [Supermedo/bloodborne_pc](https://github.com/Supermedo/bloodborne_pc) |
+| The Order: 1886 y el resto | brunoShadPs4 | este repositorio |
+
+Todos son de código abierto (GPL-2.0) y el mérito de cada uno es de sus autores. No vienen incluidos: descárgalos de sus páginas y descomprímelos en una carpeta `motores` junto a `shadPS4.exe`:
+
+```
+shadPS4.exe
+motores.ini            (opcional: cambia o añade motores)
+motores\SpartanPort\SpartanPort.exe
+motores\inFamous\shadPS4.exe
+motores\Uncharted\Uncharted Launcher.exe
+motores\Bloodborne\Bloodborne.exe
+```
+
+* **Elección con el mando antes de jugar**: una pantalla para elegir la resolución (1080p, 1440p o 4K) con la cruceta, X para jugar y O para volver; en Uncharted, primero el juego de la colección. El resto de ajustes se ponen en lo que da más calidad y fps a cada port: pantalla completa, la mayor velocidad estable y el idioma en español.
+* **En el lanzador**, cada tarjeta dice con qué motor va el juego y con qué ajustes se jugó la última vez. Los Ajustes del lanzador solo existen para los juegos del motor propio.
+* **Con RetroBat** (u otro frontend): basta con poner este `shadPS4.exe` como emulador de PS4. El programa espera a que termines de jugar, así que Select + Start cierra el juego entero, port incluido.
+* **inFAMOUS Second Son**: de unos 32 fps con el motor anterior a unos 85 fps con el de axylpup, en la misma partida y el mismo sitio.
+
+<img alt="inFAMOUS Second Son antes y después" src="documents/Screenshots/brunoShadPs4_infamous_antes_despues.jpg" width="800" />
+
+`motores.ini` permite cambiar el programa de cada juego, una línea por juego: `CUSA01623,CUSA01715 = spartanport | motores\SpartanPort\SpartanPort.exe`. Tipos: `spartanport`, `bloodborne`, `uncharted`, `shadps4-release`, `shadps4` (`--game`) e `interno` (el motor propio). Junto a cada programa, un `brunoshadps4.env` con líneas `NOMBRE=valor` le pasa variables de entorno.
+
 ### El lanzador
 
 Al abrir `shadPS4.exe` sin argumentos aparece un lanzador propio, oscuro y en español o inglés. Cada juego dice a qué resolución se dibuja, cómo se muestra, si usa FSR y generación de cuadros, su idioma y cuánto se ha jugado.
