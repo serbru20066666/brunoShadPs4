@@ -75,6 +75,8 @@ std::map<std::string, Engine> LoadTable(const std::filesystem::path& folder) {
     ParseLine(R"(CUSA00004,CUSA00223 = shadps4-release | motores\inFamous\shadPS4.exe)", table);
     ParseLine(R"(CUSA02320,CUSA02343,CUSA02344 = uncharted | motores\Uncharted\Uncharted Launcher.exe)",
               table);
+    ParseLine(R"(CUSA03173,CUSA00900,CUSA00207,CUSA00208,CUSA01363,CUSA03023 = bloodborne | motores\Bloodborne\Bloodborne.exe)",
+              table);
     std::ifstream in{folder / "motores.ini"};
     std::string line;
     while (in && std::getline(in, line)) {
@@ -147,6 +149,9 @@ std::string EngineName(const Engine& engine, const std::filesystem::path& progra
     }
     if (engine.kind == "uncharted") {
         return "Uncharted PC port";
+    }
+    if (engine.kind == "bloodborne") {
+        return "bloodborne_pc";
     }
     return FS::PathToUTF8String(program.stem());
 }
@@ -777,6 +782,10 @@ std::string ExternalEngineResolution(const std::string& serial) {
         const auto res = ReadKeyValue(folder / "spartanport.ini", "render_resolution");
         return res == "4K" ? "4K" : res == "1440p" ? "1440p" : "1080p";
     }
+    if (engine.kind == "bloodborne") {
+        const auto res = ReadKeyValue(folder / "bbport.ini", "output_res");
+        return res == "3840x2160" ? "4K" : res == "2560x1440" ? "1440p" : "1080p";
+    }
     if (engine.kind == "uncharted") {
         const auto config = ReadJsonFile(AppDataFile("Uncharted Launcher/launcher.json"));
         const std::string game = config.value("game", std::string{"u1"});
@@ -835,7 +844,7 @@ std::optional<ExternalEngineCard> DescribeExternalEngine(const std::string& seri
     ExternalEngineCard card;
     const auto version = EngineVersion(program.parent_path());
     card.engine = EngineName(engine, program) + (version.empty() ? "" : " " + version);
-    if (engine.kind == "spartanport" || engine.kind == "issn") {
+    if (engine.kind == "spartanport" || engine.kind == "issn" || engine.kind == "bloodborne") {
         card.details = LastRunDetails(program.parent_path());
     } else if (engine.kind == "uncharted") {
         card.details = UnchartedDetails();
@@ -908,6 +917,31 @@ bool LaunchExternalEngine(const std::string& serial, const std::string& title,
             LOG_ERROR(Common, "Could not write issn_pc's settings.json");
             return false;
         }
+    } else if (engine.kind == "bloodborne") {
+        // Its launcher keeps the game folder and language in AppData; the picture in bbport.ini.
+        const auto settings = AppDataFile("bbport-launcher/settings.json");
+        if (settings.empty() || !SetGameDir(settings, eboot)) {
+            LOG_ERROR(Common, "Could not write bloodborne_pc's settings.json");
+            return false;
+        }
+        auto config = ReadJsonFile(settings);
+        config["language"] = "3"; // Spanish
+        WriteText(settings, config.dump(2));
+        const auto choice = ChooseResolution(title.empty() ? serial : title,
+                                             ExternalEngineResolution(serial));
+        if (!choice) {
+            return WentBack(serial);
+        }
+        // Native at the chosen size (no upscaler), full screen, the frame rate unlocked (the port's
+        // default with game version 1.09).
+        const auto ini = program_folder / "bbport.ini";
+        SetKeyValue(ini, "output_res", *choice == "4K"      ? "3840x2160"
+                                       : *choice == "1440p" ? "2560x1440"
+                                                            : "1920x1080");
+        SetKeyValue(ini, "upscaler", "off");
+        SetKeyValue(ini, "preset", "0");
+        SetKeyValue(ini, "display_mode", "fullscreen");
+        args.emplace_back("--play");
     } else if (engine.kind == "uncharted") {
         const auto settings = AppDataFile("Uncharted Launcher/launcher.json");
         if (settings.empty() || !SetGameDir(settings, eboot)) {
@@ -952,7 +986,8 @@ bool LaunchExternalEngine(const std::string& serial, const std::string& title,
             const auto ini = program_folder / "analysis" / "uncharted-user" /
                              (std::string{"probe-"} + keys[game] + ".ini");
             SetKeyValue(ini, "display_mode", "fullscreen");
-            SetKeyValue(ini, "fps_limit", "120");
+            // 60: the port calls more experimental, and a session at 120 ended in a guest fault.
+            SetKeyValue(ini, "fps_limit", "60");
             SetKeyValue(ini, "frames_queued", "1");
             SetKeyValue(ini, "vsync", "1");
             SetKeyValue(ini, "async_shaders", "1");

@@ -17,6 +17,7 @@ namespace Common {
 ///   CUSA01623,CUSA01715 = spartanport | motores\SpartanPort\SpartanPort.exe
 ///   CUSA00004,CUSA00223 = shadps4-release | motores\inFamous\shadPS4.exe
 ///   CUSA02320,CUSA02343,CUSA02344 = uncharted | motores\Uncharted\Uncharted Launcher.exe
+///   CUSA03173,CUSA00900,... = bloodborne | motores\Bloodborne\Bloodborne.exe
 /// Kinds:
 ///   spartanport      writes the game folder into the program's settings.json, runs it with --play
 ///   issn             the same launcher with its settings in %APPDATA%\issn-launcher\settings.json
@@ -24,6 +25,8 @@ namespace Common {
 ///   shadps4          runs it with --game <eboot>
 ///   uncharted        writes the game folder into %APPDATA%\Uncharted Launcher\launcher.json and
 ///                    opens that launcher, to choose one of the collection's three games
+///   bloodborne       the game folder in %APPDATA%\bbport-launcher\settings.json, the picture in
+///                    bbport.ini beside it, runs it with --play
 /// "interno" as the kind keeps the game on this program.
 
 /// What a game card says about a game that runs on another program, from that program's own
