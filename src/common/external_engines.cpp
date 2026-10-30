@@ -93,10 +93,12 @@ std::map<std::string, Engine> LoadTable(const std::filesystem::path& folder) {
     std::map<std::string, Engine> table;
     ParseLine(R"(CUSA01623,CUSA01715 = spartanport | motores\SpartanPort\SpartanPort.exe)", table);
     ParseLine(R"(CUSA00004,CUSA00223 = shadps4-release | motores\inFamous\shadPS4.exe)", table);
-    ParseLine(R"(CUSA02320,CUSA02343,CUSA02344 = uncharted | motores\Uncharted\Uncharted Launcher.exe)",
-              table);
-    ParseLine(R"(CUSA03173,CUSA00900,CUSA00207,CUSA00208,CUSA01363,CUSA03023 = bloodborne | motores\Bloodborne\Bloodborne.exe)",
-              table);
+    ParseLine(
+        R"(CUSA02320,CUSA02343,CUSA02344 = uncharted | motores\Uncharted\Uncharted Launcher.exe)",
+        table);
+    ParseLine(
+        R"(CUSA03173,CUSA00900,CUSA00207,CUSA00208,CUSA01363,CUSA03023 = bloodborne | motores\Bloodborne\Bloodborne.exe)",
+        table);
     std::ifstream in{folder / "motores.ini"};
     std::string line;
     while (in && std::getline(in, line)) {
@@ -288,7 +290,8 @@ std::string InspectExecutableVersion(const std::filesystem::path& program) {
 
             // 1. axylpup/shadPS4 embeds "second-son-v1.1.1" in .rdata.
             if (const auto pos = view.find("second-son-v"); pos != std::string_view::npos) {
-                const std::string sub{view.substr(pos + 12, std::min<size_t>(24, view.size() - pos - 12))};
+                const std::string sub{
+                    view.substr(pos + 12, std::min<size_t>(24, view.size() - pos - 12))};
                 if (std::smatch m; std::regex_search(sub, m, ver_re)) {
                     found_version = m[1].str();
                 }
@@ -321,7 +324,8 @@ std::string InspectExecutableVersion(const std::filesystem::path& program) {
     return found_version;
 }
 
-/// Reads the installed version of a fork/port from VERSION, README, executable metadata or folder name.
+/// Reads the installed version of a fork/port from VERSION, README, executable metadata or folder
+/// name.
 std::string EngineVersion(const std::filesystem::path& program) {
     const auto folder = program.parent_path();
     static const std::regex version{R"((\d+\.\d+(?:\.\d+)*))"};
@@ -372,9 +376,9 @@ std::array<std::string, 4> LastRunDetails(const std::filesystem::path& folder) {
             patches = "Resolución: 2560 x 1440";
         }
     }
-    const std::map<std::string, std::string> modes{
-        {"Windowed", "En ventana"}, {"Borderless", "Pantalla completa (sin bordes)"},
-        {"Fullscreen", "Pantalla completa"}};
+    const std::map<std::string, std::string> modes{{"Windowed", "En ventana"},
+                                                   {"Borderless", "Pantalla completa (sin bordes)"},
+                                                   {"Fullscreen", "Pantalla completa"}};
     const auto mode = modes.find(window);
     details[0] = patches.empty() ? "Resolución: 1920 x 1080" : patches;
     details[1] = window.empty() ? "" : (mode != modes.end() ? mode->second : window);
@@ -430,7 +434,8 @@ std::array<std::string, 4> UnchartedDetails() {
         const auto& g = config["games"][game];
         details[1] = "Resolución: " + g.value("resolution", std::string{"1920x1080"});
         const auto preset = presets.find(g.value("preset", std::string{"medium"}));
-        details[2] = "Calidad: " + (preset != presets.end() ? preset->second : g.value("preset", std::string{}));
+        details[2] = "Calidad: " +
+                     (preset != presets.end() ? preset->second : g.value("preset", std::string{}));
     }
     details[3] = "El juego se elige al abrir";
     return details;
@@ -485,9 +490,9 @@ struct Splash {
             const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
                                   std::chrono::steady_clock::now() - self->start)
                                   .count();
-            const std::wstring text =
-                self->line2 + L"   (" + std::to_wstring(secs / 60) + L":" +
-                (secs % 60 < 10 ? L"0" : L"") + std::to_wstring(secs % 60) + L")";
+            const std::wstring text = self->line2 + L"   (" + std::to_wstring(secs / 60) + L":" +
+                                      (secs % 60 < 10 ? L"0" : L"") + std::to_wstring(secs % 60) +
+                                      L")";
             RECT t2{24, 62, r.right - 24, 90};
             DrawTextW(dc, text.c_str(), -1, &t2, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
             SelectObject(dc, old);
@@ -531,9 +536,9 @@ struct Splash {
         const int w = 620, h = 150;
         const int x = (GetSystemMetrics(SM_CXSCREEN) - w) / 2;
         const int y = (GetSystemMetrics(SM_CYSCREEN) - h) / 2;
-        window = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, wc.lpszClassName, L"brunoShadPs4",
-                                 WS_POPUP | WS_BORDER, x, y, w, h, nullptr, nullptr, wc.hInstance,
-                                 nullptr);
+        window = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, wc.lpszClassName,
+                                 L"brunoShadPs4", WS_POPUP | WS_BORDER, x, y, w, h, nullptr,
+                                 nullptr, wc.hInstance, nullptr);
         SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
         ShowWindow(window, SW_SHOWNOACTIVATE);
         SetTimer(window, 1, 30, nullptr);
@@ -676,7 +681,8 @@ bool StartAndWait(const std::filesystem::path& program, const std::vector<std::s
 #endif
 
 /// Sets KEY=value in a KEY=value text file (an .ini or a flags file), keeping the other lines.
-bool SetKeyValue(const std::filesystem::path& path, const std::string& key, const std::string& value) {
+bool SetKeyValue(const std::filesystem::path& path, const std::string& key,
+                 const std::string& value) {
     std::vector<std::string> lines;
     bool done = false;
     {
@@ -765,9 +771,9 @@ void ForceForeground(HWND hwnd) {
 #endif
 
 /// A screen before the game to choose one of a few options (its resolution, a game of a
-/// collection), with the pad (D-pad, cross to accept, circle to go back), the keyboard or the mouse:
-/// front ends such as RetroBat start the game directly, without this emulator's launcher. Returns
-/// the chosen index, or nothing when the player went back.
+/// collection), with the pad (D-pad, cross to accept, circle to go back), the keyboard or the
+/// mouse: front ends such as RetroBat start the game directly, without this emulator's launcher.
+/// Returns the chosen index, or nothing when the player went back.
 std::optional<int> ChooseOption(const std::string& title, const std::string& subtitle,
                                 const std::vector<std::string>& labels, int selected) {
     const int n = static_cast<int>(labels.size());
@@ -827,9 +833,9 @@ std::optional<int> ChooseOption(const std::string& title, const std::string& sub
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             const bool settling = SDL_GetTicks() - opened < 500;
-            if (settling && (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ||
-                             e.type == SDL_EVENT_KEY_DOWN ||
-                             e.type == SDL_EVENT_MOUSE_BUTTON_DOWN)) {
+            if (settling &&
+                (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || e.type == SDL_EVENT_KEY_DOWN ||
+                 e.type == SDL_EVENT_MOUSE_BUTTON_DOWN)) {
                 continue;
             }
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.repeat) {
@@ -901,7 +907,8 @@ std::optional<int> ChooseOption(const std::string& title, const std::string& sub
             SDL_RenderFillRect(renderer, &box);
             text(box.x + 30, box.y + 30, 3.5f, labels[i].c_str(), 255, 255, 255);
         }
-        text(80, height - 60.0f, 2.0f, "Cruceta: elegir     X: aceptar     O: volver", 150, 155, 175);
+        text(80, height - 60.0f, 2.0f, "Cruceta: elegir     X: aceptar     O: volver", 150, 155,
+             175);
         SDL_RenderPresent(renderer);
 #ifdef _WIN32
         // Again during the first second, in case something took the front back.
@@ -928,10 +935,9 @@ std::optional<std::string> ChooseResolution(const std::string& title, const std:
             selected = i;
         }
     }
-    const auto choice = ChooseOption(title, "Elige la resolucion",
-                                     {"1080p   (1920 x 1080)", "1440p   (2560 x 1440, 2K)",
-                                      "4K      (3840 x 2160)"},
-                                     selected);
+    const auto choice = ChooseOption(
+        title, "Elige la resolucion",
+        {"1080p   (1920 x 1080)", "1440p   (2560 x 1440, 2K)", "4K      (3840 x 2160)"}, selected);
     if (!choice) {
         return std::nullopt;
     }
@@ -1020,9 +1026,8 @@ std::string FetchUrlText(const std::string& url) {
     const auto tmp = std::filesystem::temp_directory_path() / "brunoshadps4_release.json";
     std::error_code ec;
     std::filesystem::remove(tmp, ec);
-    std::wstring cmd =
-        L"curl.exe -fsSL -H \"User-Agent: brunoShadPs4\" -o \"" + tmp.wstring() + L"\" \"" +
-        std::filesystem::path{url}.wstring() + L"\"";
+    std::wstring cmd = L"curl.exe -fsSL -H \"User-Agent: brunoShadPs4\" -o \"" + tmp.wstring() +
+                       L"\" \"" + std::filesystem::path{url}.wstring() + L"\"";
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
@@ -1058,22 +1063,20 @@ bool DownloadFileWithProgress(const std::string& url, const std::filesystem::pat
             const httplib::Headers headers = {{"User-Agent", "brunoShadPs4"},
                                               {"Accept", "application/octet-stream"}};
             uint64_t received = 0;
-            const auto res = cli.Get(
-                path.c_str(), headers,
-                [&](const char* data, size_t len) {
-                    out.write(data, static_cast<std::streamsize>(len));
-                    received += len;
-                    const uint64_t total = std::max<uint64_t>(expected_size, received);
-                    const float ratio =
-                        total > 0 ? static_cast<float>(received) / static_cast<float>(total) : 0.0f;
-                    ModifyUpdateStatus([&](EngineUpdateStatus& st) {
-                        st.progress = std::clamp(ratio * 0.80f, 0.01f, 0.80f);
-                        st.message = fmt::format("Descargando {} ({:.1f} / {:.1f} MB)...",
-                                                 asset_name, received / (1024.0 * 1024.0),
-                                                 total / (1024.0 * 1024.0));
-                    });
-                    return static_cast<bool>(out);
+            const auto res = cli.Get(path.c_str(), headers, [&](const char* data, size_t len) {
+                out.write(data, static_cast<std::streamsize>(len));
+                received += len;
+                const uint64_t total = std::max<uint64_t>(expected_size, received);
+                const float ratio =
+                    total > 0 ? static_cast<float>(received) / static_cast<float>(total) : 0.0f;
+                ModifyUpdateStatus([&](EngineUpdateStatus& st) {
+                    st.progress = std::clamp(ratio * 0.80f, 0.01f, 0.80f);
+                    st.message =
+                        fmt::format("Descargando {} ({:.1f} / {:.1f} MB)...", asset_name,
+                                    received / (1024.0 * 1024.0), total / (1024.0 * 1024.0));
                 });
+                return static_cast<bool>(out);
+            });
             out.close();
             if (res && res->status == 200 && std::filesystem::file_size(dest, ec) > 1024) {
                 return true;
@@ -1145,9 +1148,10 @@ bool ExtractZipArchive(const std::filesystem::path& zip_path,
     std::filesystem::remove_all(extract_tmp, ec);
     std::filesystem::create_directories(extract_tmp, ec);
 
+#ifdef _WIN32
     // Windows native tar extracts .zip archives directly.
-    std::wstring cmd = L"tar.exe -xf \"" + zip_path.wstring() + L"\" -C \"" +
-                       extract_tmp.wstring() + L"\"";
+    std::wstring cmd =
+        L"tar.exe -xf \"" + zip_path.wstring() + L"\" -C \"" + extract_tmp.wstring() + L"\"";
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
@@ -1168,6 +1172,16 @@ bool ExtractZipArchive(const std::filesystem::path& zip_path,
         std::filesystem::remove_all(extract_tmp, ec);
         return false;
     }
+#else
+    const std::string cmd =
+        "tar -xf \"" + zip_path.string() + "\" -C \"" + extract_tmp.string() + "\"";
+    const int code = std::system(cmd.c_str());
+    if (code != 0) {
+        LOG_ERROR(Common, "ExtractZipArchive: tar exited with {}", code);
+        std::filesystem::remove_all(extract_tmp, ec);
+        return false;
+    }
+#endif
 
     // Check if the zip had a single wrapper directory (e.g. spartanport-windows/...)
     std::filesystem::path source_root = extract_tmp;
@@ -1230,7 +1244,8 @@ std::string ExternalEngineResolution(const std::string& serial) {
     const auto& [engine, program] = *found;
     const auto folder = program.parent_path();
     if (engine.kind == "shadps4-release") {
-        const auto height = ReadKeyValue(folder / "shadps4-flags-user.txt", "SHADPS4_RENDER_HEIGHT");
+        const auto height =
+            ReadKeyValue(folder / "shadps4-flags-user.txt", "SHADPS4_RENDER_HEIGHT");
         return height == "2160" ? "4K" : height == "1440" ? "1440p" : "1080p";
     }
     if (engine.kind == "spartanport") {
@@ -1267,17 +1282,22 @@ std::string CycleExternalEngineResolution(const std::string& serial) {
     const auto folder = program.parent_path();
     if (engine.kind == "shadps4-release") {
         SetKeyValue(folder / "shadps4-flags-user.txt", "SHADPS4_RENDER_HEIGHT",
-                    next == "4K" ? "2160" : next == "1440p" ? "1440" : "1080");
+                    next == "4K"      ? "2160"
+                    : next == "1440p" ? "1440"
+                                      : "1080");
     } else if (engine.kind == "spartanport") {
         const auto ini = folder / "spartanport.ini";
         SetKeyValue(ini, "render_resolution", next == "1080p" ? "native" : next);
-        SetKeyValue(ini, "output_res", next == "4K" ? "3840x2160" : next == "1440p" ? "2560x1440"
-                                                                                   : "1920x1080");
+        SetKeyValue(ini, "output_res",
+                    next == "4K"      ? "3840x2160"
+                    : next == "1440p" ? "2560x1440"
+                                      : "1920x1080");
     } else if (engine.kind == "uncharted") {
         const auto path = AppDataFile("Uncharted Launcher/launcher.json");
         auto config = ReadJsonFile(path);
-        const std::string res =
-            next == "4K" ? "3840x2160" : next == "1440p" ? "2560x1440" : "1920x1080";
+        const std::string res = next == "4K"      ? "3840x2160"
+                                : next == "1440p" ? "2560x1440"
+                                                  : "1920x1080";
         if (config.contains("games") && config["games"].is_object()) {
             for (auto& [key, game] : config["games"].items()) {
                 if (game.is_object()) {
@@ -1302,7 +1322,8 @@ std::optional<ExternalEngineCard> DescribeExternalEngine(const std::string& seri
     card.installed = exists;
     if (exists) {
         card.version = EngineVersion(program);
-        card.engine = EngineName(engine, program) + (card.version.empty() ? "" : " " + card.version);
+        card.engine =
+            EngineName(engine, program) + (card.version.empty() ? "" : " " + card.version);
         if (engine.kind == "spartanport" || engine.kind == "issn" || engine.kind == "bloodborne") {
             card.details = LastRunDetails(program.parent_path());
         } else if (engine.kind == "uncharted") {
@@ -1550,16 +1571,17 @@ bool LaunchExternalEngine(const std::string& serial, const std::string& title,
         }
         // The resolution here (the port's launcher is hard to use with a pad), the rest at the
         // best the port offers, then straight in.
-        const auto choice = ChooseResolution(title.empty() ? serial : title,
-                                             ExternalEngineResolution(serial));
+        const auto choice =
+            ChooseResolution(title.empty() ? serial : title, ExternalEngineResolution(serial));
         if (!choice) {
             return WentBack(serial);
         }
         const auto ini = program_folder / "spartanport.ini";
         SetKeyValue(ini, "render_resolution", *choice == "1080p" ? "native" : *choice);
-        SetKeyValue(ini, "output_res", *choice == "4K"      ? "3840x2160"
-                                       : *choice == "1440p" ? "2560x1440"
-                                                            : "1920x1080");
+        SetKeyValue(ini, "output_res",
+                    *choice == "4K"      ? "3840x2160"
+                    : *choice == "1440p" ? "2560x1440"
+                                         : "1920x1080");
         SetKeyValue(ini, "display_mode", "fullscreen");
         SetKeyValue(ini, "engine_fps", "144");
         SetKeyValue(ini, "vsync", "1");
@@ -1567,13 +1589,15 @@ bool LaunchExternalEngine(const std::string& serial, const std::string& title,
         SetKeyValue(ini, "deferred_readback", "1");
         args.emplace_back("--play");
     } else if (engine.kind == "shadps4-release") {
-        const auto choice = ChooseResolution(title.empty() ? serial : title,
-                                             ExternalEngineResolution(serial));
+        const auto choice =
+            ChooseResolution(title.empty() ? serial : title, ExternalEngineResolution(serial));
         if (!choice) {
             return WentBack(serial);
         }
         SetKeyValue(program_folder / "shadps4-flags-user.txt", "SHADPS4_RENDER_HEIGHT",
-                    *choice == "4K" ? "2160" : *choice == "1440p" ? "1440" : "1080");
+                    *choice == "4K"      ? "2160"
+                    : *choice == "1440p" ? "1440"
+                                         : "1080");
         if (!WriteText(program_folder / "shadps4-game.txt", FS::PathToUTF8String(eboot) + "\n")) {
             LOG_ERROR(Common, "Could not write shadps4-game.txt");
             return false;
@@ -1594,17 +1618,18 @@ bool LaunchExternalEngine(const std::string& serial, const std::string& title,
         auto config = ReadJsonFile(settings);
         config["language"] = "3"; // Spanish
         WriteText(settings, config.dump(2));
-        const auto choice = ChooseResolution(title.empty() ? serial : title,
-                                             ExternalEngineResolution(serial));
+        const auto choice =
+            ChooseResolution(title.empty() ? serial : title, ExternalEngineResolution(serial));
         if (!choice) {
             return WentBack(serial);
         }
         // Native at the chosen size (no upscaler), full screen, the frame rate unlocked (the port's
         // default with game version 1.09).
         const auto ini = program_folder / "bbport.ini";
-        SetKeyValue(ini, "output_res", *choice == "4K"      ? "3840x2160"
-                                       : *choice == "1440p" ? "2560x1440"
-                                                            : "1920x1080");
+        SetKeyValue(ini, "output_res",
+                    *choice == "4K"      ? "3840x2160"
+                    : *choice == "1440p" ? "2560x1440"
+                                         : "1920x1080");
         SetKeyValue(ini, "upscaler", "off");
         SetKeyValue(ini, "preset", "0");
         SetKeyValue(ini, "display_mode", "fullscreen");
@@ -1673,8 +1698,7 @@ bool LaunchExternalEngine(const std::string& serial, const std::string& title,
     }
     LOG_INFO(Common, "{} runs on {} ({})", serial, FS::PathToUTF8String(program), engine.kind);
 #ifdef _WIN32
-    return StartAndWait(program, args, title.empty() ? serial : title,
-                        EngineName(engine, program));
+    return StartAndWait(program, args, title.empty() ? serial : title, EngineName(engine, program));
 #else
     LOG_ERROR(Common, "Other programs for a game are only started on Windows");
     return false;

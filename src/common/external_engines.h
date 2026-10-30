@@ -21,7 +21,7 @@ namespace Common {
 /// Kinds:
 ///   spartanport      writes the game folder into the program's settings.json, runs it with --play
 ///   issn             the same launcher with its settings in %APPDATA%\issn-launcher\settings.json
-///   shadps4-release  writes the eboot path into shadps4-game.txt beside it, runs it with no arguments
+///   shadps4-release  writes the eboot path into shadps4-game.txt beside it, runs with no args
 ///   shadps4          runs it with --game <eboot>
 ///   uncharted        writes the game folder into %APPDATA%\Uncharted Launcher\launcher.json and
 ///                    opens that launcher, to choose one of the collection's three games

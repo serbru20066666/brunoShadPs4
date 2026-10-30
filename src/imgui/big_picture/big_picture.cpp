@@ -154,8 +154,10 @@ void DrawBanner(ImDrawList* draw_list, ImVec2 min, ImVec2 max, float rounding) {
     const ImVec2 uv1{1.0f, uv0.y + v};
     draw_list->AddImageRounded(ImTextureID(single_game.background), min, max, uv0, uv1,
                                IM_COL32_WHITE, rounding);
-    const ImU32 dark = ImGui::GetColorU32(ImVec4(Theme::Card.x, Theme::Card.y, Theme::Card.z, 0.92f));
-    const ImU32 clear = ImGui::GetColorU32(ImVec4(Theme::Card.x, Theme::Card.y, Theme::Card.z, 0.0f));
+    const ImU32 dark =
+        ImGui::GetColorU32(ImVec4(Theme::Card.x, Theme::Card.y, Theme::Card.z, 0.92f));
+    const ImU32 clear =
+        ImGui::GetColorU32(ImVec4(Theme::Card.x, Theme::Card.y, Theme::Card.z, 0.0f));
     const float solid = min.x + rounding * 2.0f;
     draw_list->AddRectFilled(min, {solid, max.y}, dark, rounding, ImDrawFlags_RoundCornersLeft);
     draw_list->AddRectFilledMultiColor({solid, min.y}, {min.x + size.x * 0.66f, max.y}, dark, clear,
@@ -464,7 +466,8 @@ void FillGameDetails(std::vector<IconInfo>& icons) {
             icon.details[3].clear();
             icon.details[4].clear();
         }
-        // A game that runs on another program shows that program, its installed version, and its settings.
+        // A game that runs on another program shows that program, its installed version, and its
+        // settings.
         icon.external = false;
         if (const auto other = Common::DescribeExternalEngine(icon.serial)) {
             icon.external = true;
@@ -580,7 +583,8 @@ void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor, int& sugge
             ImGui::PopStyleVar();
             ImGui::SetWindowFontScale(uiScale);
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip(Tr("Settings tested with this game. You can change them later."));
+                ImGui::SetTooltip("%s",
+                                  Tr("Settings tested with this game. You can change them later."));
             }
         }
 
@@ -622,7 +626,8 @@ void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor, int& sugge
             }
             ImGui::PopStyleVar();
         } else {
-            // Internal engine: Play + Settings + Update, sized to fit cleanly inside the card width.
+            // Internal engine: Play + Settings + Update, sized to fit cleanly inside the card
+            // width.
             const float btn_scale = 0.85f;
             ImGui::SetWindowFontScale(uiScale * btn_scale);
             const float text_sum = ImGui::CalcTextSize(Tr("Play")).x +
@@ -631,8 +636,8 @@ void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor, int& sugge
             const float btn_gap = 6.0f * uiScale;
             const float pad_x = std::clamp((cover - text_sum - btn_gap * 2.0f) / 6.0f,
                                            6.0f * uiScale, 11.0f * uiScale);
-            const float pad_y = ImGui::GetStyle().FramePadding.y +
-                                (frame - ImGui::GetFrameHeight()) * 0.5f;
+            const float pad_y =
+                ImGui::GetStyle().FramePadding.y + (frame - ImGui::GetFrameHeight()) * 0.5f;
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
                                 ImVec2(pad_x, std::max(4.0f * uiScale, pad_y)));
             play |= Theme::AccentButton(Tr("Play"));
@@ -786,10 +791,10 @@ void Launch(char* executableName, bool sameProcess) {
     }
 
     LoadSingleGame(executableName);
-    SDL_Window* window = SDL_CreateWindow(
-        single_game.active ? single_game.title.c_str() : "brunoShadPs4",
-        single_game.active ? 1440 : 1280, single_game.active ? 960 : 800,
-        single_game.active ? SDL_WindowFlags{0} : SDL_WINDOW_RESIZABLE);
+    SDL_Window* window =
+        SDL_CreateWindow(single_game.active ? single_game.title.c_str() : "brunoShadPs4",
+                         single_game.active ? 1440 : 1280, single_game.active ? 960 : 800,
+                         single_game.active ? SDL_WindowFlags{0} : SDL_WINDOW_RESIZABLE);
     if (window == nullptr) {
         LOG_ERROR(ImGui, "SDL Window Creation Error: {}", SDL_GetError());
         SDL_Quit();
@@ -971,8 +976,7 @@ void Launch(char* executableName, bool sameProcess) {
                                 single_game.title)
                         .c_str());
             } else {
-                Overlay::TextCentered(
-                    Tr("No games yet. Add the folder that contains your games."));
+                Overlay::TextCentered(Tr("No games yet. Add the folder that contains your games."));
             }
             ImGui::Dummy(ImVec2(0.0f, 10.f * uiScale));
             const char* label =
@@ -1011,16 +1015,14 @@ void Launch(char* executableName, bool sameProcess) {
                                                           : st.engine_name.c_str());
             ImGui::SetWindowFontScale(uiScale);
             if (!st.repo.empty()) {
-                ImGui::TextDisabled("%s",
-                                    fmt::format("{}github.com/{}", Tr("Repository: "), st.repo)
-                                        .c_str());
+                ImGui::TextDisabled(
+                    "%s", fmt::format("{}github.com/{}", Tr("Repository: "), st.repo).c_str());
             }
             ImGui::Dummy(ImVec2(0.0f, 6.0f * uiScale));
-            ImGui::TextUnformatted(
-                fmt::format("{}{}", Tr("Installed version: "),
-                            st.installed_version.empty() ? Tr("not installed")
-                                                         : st.installed_version)
-                    .c_str());
+            ImGui::TextUnformatted(fmt::format("{}{}", Tr("Installed version: "),
+                                               st.installed_version.empty() ? Tr("not installed")
+                                                                            : st.installed_version)
+                                       .c_str());
             if (!st.latest_version.empty()) {
                 ImGui::TextUnformatted(
                     fmt::format("{}{}", Tr("Latest official release: "), st.latest_version)
@@ -1089,14 +1091,14 @@ void Launch(char* executableName, bool sameProcess) {
             ImGui::TextUnformatted(
                 Tr("All the credit for the emulator goes to the shadPS4 Emulator"));
             ImGui::TextUnformatted(Tr("Project and its contributors."));
-            ImGui::TextDisabled(Tr("github.com/shadps4-emu/shadPS4  -  GPL-2.0-or-later"));
+            ImGui::TextDisabled("%s", Tr("github.com/shadps4-emu/shadPS4  -  GPL-2.0-or-later"));
             ImGui::Dummy(ImVec2(0.0f, 6.0f * uiScale));
             ImGui::TextUnformatted(Tr("This fork adds"));
-            ImGui::TextDisabled(Tr("Frame generation with AMD FSR 3 (FidelityFX SDK, MIT)"));
+            ImGui::TextDisabled("%s", Tr("Frame generation with AMD FSR 3 (FidelityFX SDK, MIT)"));
             ImGui::TextDisabled(
-                Tr("Fixes and speed-ups for God of War III and inFamous Second Son"));
-            ImGui::TextDisabled(Tr("This launcher, set in Poppins (OFL)"));
-            ImGui::TextDisabled(Tr("github.com/serbru20066666/brunoShadPs4"));
+                "%s", Tr("Fixes and speed-ups for God of War III and inFamous Second Son"));
+            ImGui::TextDisabled("%s", Tr("This launcher, set in Poppins (OFL)"));
+            ImGui::TextDisabled("%s", Tr("github.com/serbru20066666/brunoShadPs4"));
             ImGui::Dummy(ImVec2(0.0f, 6.0f * uiScale));
             ImGui::TextUnformatted(Tr("Contact"));
             ImGui::TextDisabled("Bruno Cardenas");
@@ -1127,9 +1129,8 @@ void Launch(char* executableName, bool sameProcess) {
             SDL_GetWindowSize(window, &width, &height);
             SDL_Rect usable{};
             const int screen_height =
-                SDL_GetDisplayUsableBounds(SDL_GetDisplayForWindow(window), &usable)
-                    ? usable.h - 48
-                    : 2000;
+                SDL_GetDisplayUsableBounds(SDL_GetDisplayForWindow(window), &usable) ? usable.h - 48
+                                                                                     : 2000;
             const float wanted = single_game.wanted_height;
             if (wanted > static_cast<float>(screen_height)) {
                 uiScale = std::max(0.6f, uiScale * static_cast<float>(screen_height) / wanted);
