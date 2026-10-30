@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <ctime>
 #include <fstream>
 #include <regex>
@@ -47,6 +48,14 @@ float uiScale = 1.0f;
 SDL_Renderer* renderer;
 
 namespace {
+
+std::string CleanEmulatorVersion() {
+    std::string ver{Common::g_version};
+    if (const auto wip = ver.find(" WIP"); wip != std::string::npos) {
+        ver.erase(wip);
+    }
+    return ver;
+}
 
 /// A game's own launcher: a juego.ini next to the executable names the game, and the launcher
 /// then shows only that game, its main settings and its recommended ones. Lines:
@@ -155,7 +164,8 @@ void DrawBanner(ImDrawList* draw_list, ImVec2 min, ImVec2 max, float rounding) {
 
 /// A game's own launcher: a banner with the game's picture, its name and the play button, and
 /// under it two panels, its main settings and how it is set up.
-void DrawSingleGame(ImGuiEmuSettings::SettingsWindow& settings, bool show_settings) {
+void DrawSingleGame(ImGuiEmuSettings::SettingsWindow& settings, bool show_settings,
+                    int& updateFor) {
     const IconInfo& game = gameIcons[0];
     const float s = uiScale;
     const float width = ImGui::GetContentRegionAvail().x;
@@ -199,6 +209,10 @@ void DrawSingleGame(ImGuiEmuSettings::SettingsWindow& settings, bool show_settin
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(40.0f * s, 15.0f * s));
     ImGui::SetWindowFontScale(s * 1.15f);
     const bool play = Theme::AccentButton(Tr("Play"));
+    ImGui::SameLine(0.0f, 12.0f * s);
+    if (Theme::Button(Tr("Update"))) {
+        updateFor = 0;
+    }
     ImGui::SetWindowFontScale(s);
     ImGui::PopStyleVar();
     ImGui::EndGroup();
@@ -376,6 +390,7 @@ void FillGameDetails(std::vector<IconInfo>& icons) {
     // A window is kept inside the usable area of the display, as the emulator does.
     SDL_Rect usable{};
     SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &usable);
+    const std::string own_version = CleanEmulatorVersion();
 
     for (auto& icon : icons) {
         const auto game = ReadJson(GetUserPath(PathType::CustomConfigs) / (icon.serial + ".json"));
@@ -398,6 +413,9 @@ void FillGameDetails(std::vector<IconInfo>& icons) {
                 out_width = static_cast<int>(width * fit);
                 out_height = static_cast<int>(height * fit);
             }
+            // Line 0 always shows the fork/port and its installed version.
+            icon.details[0] = fmt::format("{}brunoShadPs4 {}", Tr("Engine: "), own_version);
+
             // The game renders at a resolution of its own, which only a patch changes. A
             // resolution patch says the resolution in its name.
             using ImGuiEmuSettings::SettingsWindow;
@@ -406,13 +424,13 @@ void FillGameDetails(std::vector<IconInfo>& icons) {
                                           : std::string{};
             static const std::regex size{R"((\d{3,4})\s*[xX]\s*(\d{3,4}))"};
             if (std::smatch found; std::regex_search(patch, found, size)) {
-                icon.details[0] =
+                icon.details[1] =
                     fmt::format("{}{} x {}", Tr("Resolution: "), found[1].str(), found[2].str());
             } else {
                 // Without a patch a game gives the console the picture it was made for: 1080p
                 // on a PS4, and whatever it chooses on a PS4 Pro.
                 const bool pro = StoredSetting(game, global, "General", "neo_mode", false);
-                icon.details[0] = fmt::format("{}{}", Tr("Resolution: "),
+                icon.details[1] = fmt::format("{}{}", Tr("Resolution: "),
                                               !patch.empty() ? Tr("patched")
                                               : pro          ? Tr("original of the game")
                                                              : "1920 x 1080");
@@ -420,39 +438,37 @@ void FillGameDetails(std::vector<IconInfo>& icons) {
             // The resolution above is the detail the picture has. In full screen it is
             // stretched over the display, whose size says nothing about the picture, so only
             // a window is given a size.
-            icon.details[1] =
+            icon.details[2] =
                 full_screen ? std::string{Tr("Full screen")}
                             : fmt::format("{} {} x {}", Tr("Windowed"), out_width, out_height);
             // In full screen the picture is enlarged to the display, named the usual way.
             const bool fsr = StoredSetting(game, global, "GPU", "fsr_enabled", false);
             if (!fsr) {
-                icon.details[2] = Tr("Without FSR");
+                icon.details[3] = Tr("Without FSR");
             } else if (full_screen && display_height > 0) {
                 const std::string target = display_height == 2160 ? "4K"
                                            : display_height == 4320
                                                ? "8K"
                                                : fmt::format("{}p", display_height);
-                icon.details[2] = fmt::format(fmt::runtime(Tr("Enlarged to {} with FSR")), target);
+                icon.details[3] = fmt::format(fmt::runtime(Tr("Enlarged to {} with FSR")), target);
             } else {
-                icon.details[2] = Tr("Enlarged with FSR");
+                icon.details[3] = Tr("Enlarged with FSR");
             }
-            icon.details[3] = Tr(StoredSetting(game, global, "GPU", "frame_generation", false)
+            icon.details[4] = Tr(StoredSetting(game, global, "GPU", "frame_generation", false)
                                      ? "Frame generation: on"
                                      : "Frame generation: off");
-            icon.details[4] =
-                ConsoleLanguageName(StoredSetting(game, global, "General", "console_language", 1));
         } catch (const nlohmann::json::exception&) {
-            icon.details[0].clear();
+            icon.details[0] = fmt::format("{}brunoShadPs4 {}", Tr("Engine: "), own_version);
             icon.details[1].clear();
             icon.details[2].clear();
             icon.details[3].clear();
             icon.details[4].clear();
         }
-        // A game that runs on another program shows that program and its settings.
+        // A game that runs on another program shows that program, its installed version, and its settings.
         icon.external = false;
         if (const auto other = Common::DescribeExternalEngine(icon.serial)) {
             icon.external = true;
-            icon.details[0] = "Motor: " + other->engine;
+            icon.details[0] = fmt::format("{}{}", Tr("Engine: "), other->engine);
             for (size_t k = 0; k < other->details.size(); ++k) {
                 icon.details[k + 1] = other->details[k];
             }
@@ -489,9 +505,10 @@ void FillGameDetails(std::vector<IconInfo>& icons) {
     }
 }
 
-/// Draws the game grid: one card per game with its cover, its name and its two actions. Sets
-/// `settingsFor` to the game whose settings button was pressed.
-void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor, int& suggestFor) {
+/// Draws the game grid: one card per game with its cover, its name and its actions. Sets
+/// `settingsFor` or `updateFor` to the game whose button was pressed.
+void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor, int& suggestFor,
+                  int& updateFor) {
     const float maxAvailableWidth = ImGui::GetContentRegionAvail().x;
     const float pad = 18.0f * uiScale;
     const float gap = 22.0f * uiScale;
@@ -579,9 +596,13 @@ void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor, int& sugge
         const float details_top = title_min.y + line * 2.0f + 8.0f * uiScale;
         ImGui::PushClipRect({cover_min.x, details_top},
                             {cover_max.x, details_top + details_line * 7.0f}, true);
-        ImGui::SetWindowFontScale(uiScale * details_scale);
         ImGui::PushStyleColor(ImGuiCol_Text, Theme::TextDim);
         for (int row = 0; row < 7; ++row) {
+            ImGui::SetWindowFontScale(uiScale * details_scale);
+            const float text_w = ImGui::CalcTextSize(gameIcons[i].details[row].c_str()).x;
+            if (text_w > cover && text_w > 0.0f) {
+                ImGui::SetWindowFontScale(uiScale * details_scale * (cover / text_w));
+            }
             ImGui::SetCursorScreenPos({cover_min.x, details_top + details_line * row});
             ImGui::TextUnformatted(gameIcons[i].details[row].c_str());
         }
@@ -590,18 +611,42 @@ void SetGameIcons(std::vector<IconInfo>& gameIcons, int& settingsFor, int& sugge
         ImGui::PopClipRect();
 
         ImGui::SetCursorScreenPos({cover_min.x, pos.y + card.y - pad - frame});
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-                            ImVec2(16.0f * uiScale, ImGui::GetStyle().FramePadding.y));
-        play |= Theme::AccentButton(Tr("Play"));
-        // The settings of a game on another program are in that program (or on the screen it
-        // shows before the game).
-        if (!gameIcons[i].external) {
+        if (gameIcons[i].external) {
+            // External fork/port: Play + Update from official GitHub releases.
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                ImVec2(14.0f * uiScale, ImGui::GetStyle().FramePadding.y));
+            play |= Theme::AccentButton(Tr("Play"));
             ImGui::SameLine(0.0f, 8.0f * uiScale);
+            if (Theme::Button(Tr("Update"))) {
+                updateFor = i;
+            }
+            ImGui::PopStyleVar();
+        } else {
+            // Internal engine: Play + Settings + Update, sized to fit cleanly inside the card width.
+            const float btn_scale = 0.85f;
+            ImGui::SetWindowFontScale(uiScale * btn_scale);
+            const float text_sum = ImGui::CalcTextSize(Tr("Play")).x +
+                                   ImGui::CalcTextSize(Tr("Settings")).x +
+                                   ImGui::CalcTextSize(Tr("Update")).x;
+            const float btn_gap = 6.0f * uiScale;
+            const float pad_x = std::clamp((cover - text_sum - btn_gap * 2.0f) / 6.0f,
+                                           6.0f * uiScale, 11.0f * uiScale);
+            const float pad_y = ImGui::GetStyle().FramePadding.y +
+                                (frame - ImGui::GetFrameHeight()) * 0.5f;
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                ImVec2(pad_x, std::max(4.0f * uiScale, pad_y)));
+            play |= Theme::AccentButton(Tr("Play"));
+            ImGui::SameLine(0.0f, btn_gap);
             if (Theme::Button(Tr("Settings"))) {
                 settingsFor = i;
             }
+            ImGui::SameLine(0.0f, btn_gap);
+            if (Theme::Button(Tr("Update"))) {
+                updateFor = i;
+            }
+            ImGui::PopStyleVar();
+            ImGui::SetWindowFontScale(uiScale);
         }
-        ImGui::PopStyleVar();
 
         if (play) {
             done = true;
@@ -820,6 +865,8 @@ void Launch(char* executableName, bool sameProcess) {
         uiScale = 1.0f;
     }
 
+    bool updateRefreshed = false;
+
     while (!done) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
@@ -862,7 +909,7 @@ void Launch(char* executableName, bool sameProcess) {
             ImGui::SetWindowFontScale(uiScale);
             ImGui::SameLine();
             ImGui::AlignTextToFramePadding();
-            ImGui::TextDisabled("%s", fmt::format("  {}", Common::g_version).c_str());
+            ImGui::TextDisabled("%s", fmt::format("  {}", CleanEmulatorVersion()).c_str());
             ImGui::SameLine();
         }
         const char* add_label = single_game.active ? Tr("Game folder") : Tr("Add games");
@@ -889,10 +936,11 @@ void Launch(char* executableName, bool sameProcess) {
 
         int settingsFor = -1;
         int suggestFor = -1;
+        int updateFor = -1;
         if (single_game.active && !gameIcons.empty()) {
-            DrawSingleGame(settingsWindow, showSettings);
+            DrawSingleGame(settingsWindow, showSettings, updateFor);
         } else {
-            SetGameIcons(gameIcons, settingsFor, suggestFor);
+            SetGameIcons(gameIcons, settingsFor, suggestFor, updateFor);
         }
         if (suggestFor >= 0) {
             settingsWindow.ApplySuggestedTo(gameIcons[suggestFor].serial,
@@ -937,6 +985,75 @@ void Launch(char* executableName, bool sameProcess) {
             }
         }
         ImGui::EndChild();
+
+        if (updateFor >= 0 && updateFor < static_cast<int>(gameIcons.size())) {
+            updateRefreshed = false;
+            Common::StartEngineUpdate(gameIcons[updateFor].serial, false);
+            ImGui::OpenPopup(Tr("Update engine"));
+        }
+
+        // Engine update modal popup (official GitHub releases)
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always,
+                                ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSizeConstraints(ImVec2(480.0f * uiScale, 0.0f),
+                                            ImVec2(640.0f * uiScale, 600.0f * uiScale));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(32.0f * uiScale, 28.0f * uiScale));
+        if (ImGui::BeginPopupModal(Tr("Update engine"), nullptr,
+                                   ImGuiWindowFlags_AlwaysAutoResize |
+                                       ImGuiWindowFlags_NoTitleBar)) {
+            const auto st = Common::GetEngineUpdateStatus();
+            if (st.finished && !updateRefreshed) {
+                FillGameDetails(gameIcons);
+                updateRefreshed = true;
+            }
+            ImGui::SetWindowFontScale(uiScale * 1.35f);
+            ImGui::TextUnformatted(st.engine_name.empty() ? Tr("Update engine")
+                                                          : st.engine_name.c_str());
+            ImGui::SetWindowFontScale(uiScale);
+            if (!st.repo.empty()) {
+                ImGui::TextDisabled("%s",
+                                    fmt::format("{}github.com/{}", Tr("Repository: "), st.repo)
+                                        .c_str());
+            }
+            ImGui::Dummy(ImVec2(0.0f, 6.0f * uiScale));
+            ImGui::TextUnformatted(
+                fmt::format("{}{}", Tr("Installed version: "),
+                            st.installed_version.empty() ? Tr("not installed")
+                                                         : st.installed_version)
+                    .c_str());
+            if (!st.latest_version.empty()) {
+                ImGui::TextUnformatted(
+                    fmt::format("{}{}", Tr("Latest official release: "), st.latest_version)
+                        .c_str());
+            }
+            ImGui::Dummy(ImVec2(0.0f, 8.0f * uiScale));
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 460.0f * uiScale);
+            ImGui::TextDisabled("%s", st.message.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::Dummy(ImVec2(0.0f, 10.0f * uiScale));
+
+            if (st.active) {
+                const float frac =
+                    st.progress >= 0.0f
+                        ? st.progress
+                        : static_cast<float>(std::fmod(ImGui::GetTime() * 0.65, 1.0));
+                ImGui::ProgressBar(frac, ImVec2(460.0f * uiScale, 10.0f * uiScale), "");
+            } else {
+                if (st.up_to_date) {
+                    if (Theme::Button(Tr("Reinstall"))) {
+                        updateRefreshed = false;
+                        Common::StartEngineUpdate(st.serial, true);
+                    }
+                    ImGui::SameLine(0.0f, 10.0f * uiScale);
+                }
+                if (Theme::AccentButton(Tr("Close")) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+                    Common::ClearEngineUpdateStatus();
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleVar();
 
         // Whose work this is.
         {

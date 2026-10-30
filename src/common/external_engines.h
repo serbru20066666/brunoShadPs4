@@ -33,9 +33,36 @@ namespace Common {
 /// settings (or what it used the last time). Empty for games that run here.
 struct ExternalEngineCard {
     std::string engine;
+    std::string version;
+    bool installed = true;
     std::array<std::string, 4> details;
 };
 std::optional<ExternalEngineCard> DescribeExternalEngine(const std::string& serial);
+
+/// Progress and result of updating a fork/port from its official GitHub Releases.
+struct EngineUpdateStatus {
+    bool active = false;
+    bool finished = false;
+    bool success = false;
+    bool up_to_date = false;
+    float progress = 0.0f; ///< 0..1 while downloading or extracting (< 0 if indeterminate)
+    std::string serial;
+    std::string engine_name;
+    std::string repo;
+    std::string installed_version;
+    std::string latest_version;
+    std::string message;
+};
+
+/// Starts checking/downloading/installing the latest official GitHub release for the game's
+/// fork/port. If `force_reinstall` is true, downloads and installs even when already up to date.
+void StartEngineUpdate(const std::string& serial, bool force_reinstall = false);
+
+/// Current state of the ongoing or last engine update.
+EngineUpdateStatus GetEngineUpdateStatus();
+
+/// Dismisses the finished update status.
+void ClearEngineUpdateStatus();
 
 /// The render resolution of a game on another program, as "1080p", "1440p" or "4K" (empty when
 /// that program's resolution cannot be set from here), and the next one, written into that

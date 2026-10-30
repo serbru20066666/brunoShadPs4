@@ -92,13 +92,52 @@ motores\Bloodborne\Bloodborne.exe
 ```
 
 * **Elección con el mando antes de jugar**: una pantalla para elegir la resolución (1080p, 1440p o 4K) con la cruceta, X para jugar y O para volver; en Uncharted, primero el juego de la colección. El resto de ajustes se ponen en lo que da más calidad y fps a cada port: pantalla completa, la mayor velocidad estable y el idioma en español.
-* **En el lanzador**, cada tarjeta dice con qué motor va el juego y con qué ajustes se jugó la última vez. Los Ajustes del lanzador solo existen para los juegos del motor propio.
+* **En el lanzador**, cada tarjeta muestra el motor asociado, su versión instalada y un botón **Actualizar** para descargar e instalar automáticamente los últimos releases oficiales directamente desde GitHub respetando tus partidas y configuraciones. Los Ajustes del lanzador siguen disponibles para los juegos del motor propio.
 * **Con RetroBat** (u otro frontend): basta con poner este `shadPS4.exe` como emulador de PS4. El programa espera a que termines de jugar, así que Select + Start cierra el juego entero, port incluido.
 * **inFAMOUS Second Son**: de unos 32 fps con el motor anterior a unos 85 fps con el de axylpup, en la misma partida y el mismo sitio.
 
 <img alt="inFAMOUS Second Son antes y después" src="documents/Screenshots/brunoShadPs4_infamous_antes_despues.jpg" width="800" />
 
 `motores.ini` permite cambiar el programa de cada juego, una línea por juego: `CUSA01623,CUSA01715 = spartanport | motores\SpartanPort\SpartanPort.exe`. Tipos: `spartanport`, `bloodborne`, `uncharted`, `shadps4-release`, `shadps4` (`--game`) e `interno` (el motor propio). Junto a cada programa, un `brunoshadps4.env` con líneas `NOMBRE=valor` le pasa variables de entorno.
+
+### Cómo usarlo
+
+<img alt="Lanzador de brunoShadPs4 con cinco juegos, cada uno con su motor" src="documents/Screenshots/brunoShadPs4_lanzador_mando.jpg" width="800" />
+
+1. **Descarga** el `.zip` de Windows de esta versión en [Releases](https://github.com/serbru20066666/brunoShadPs4/releases) y descomprímelo en una carpeta, por ejemplo `C:\brunoShadPs4`.
+2. **Descarga los motores** de los juegos que vayas a jugar (los enlaces están en la tabla de arriba) y descomprime cada uno en su carpeta dentro de `motores`, con el nombre exacto:
+   ```
+   C:\brunoShadPs4\shadPS4.exe
+   C:\brunoShadPs4\motores\SpartanPort\SpartanPort.exe
+   C:\brunoShadPs4\motores\inFamous\shadPS4.exe
+   C:\brunoShadPs4\motores\Uncharted\Uncharted Launcher.exe
+   C:\brunoShadPs4\motores\Bloodborne\Bloodborne.exe
+   ```
+   Los motores que no necesites se pueden omitir.
+3. **Abre `shadPS4.exe`**, pulsa **Agregar juegos** y elige la carpeta donde guardas tus juegos de PS4. Cada juego es una carpeta con `eboot.bin` y `sce_sys`, igual que en shadPS4. Aparecen como tarjetas, y las que tienen motor dicen "Motor: …".
+4. **Pulsa Jugar** (con el ratón o con X en el mando). Si el juego va con un motor, sale la pantalla de resolución: cruceta para elegir, X para jugar y O para volver al lanzador. En Uncharted primero eliges el juego de la colección.
+
+Versiones de juego probadas: God of War III Remastered (CUSA01623), inFAMOUS Second Son 01.07 (la que da 4K nativo), Uncharted con la actualización 1.02 y Bloodborne 1.09.
+
+### Cómo asociar un juego a su motor
+
+- **Automático**: los juegos de la tabla se asocian solos por su número de serie (el `CUSA…` de PS4), en todas las regiones conocidas. Basta con que el motor esté en su carpeta. Si una tarjeta no dice "Motor: …", falta esa carpeta o el `.exe` tiene otro nombre.
+- **A mano**: crea un archivo `motores.ini` junto a `shadPS4.exe` (en Releases hay uno de ejemplo, `motores.ini`) con una línea por juego:
+  ```
+  # serie(s) del juego = tipo | programa (ruta relativa a shadPS4.exe o absoluta)
+  CUSA01623,CUSA01715 = spartanport | motores\SpartanPort\SpartanPort.exe
+  CUSA00900 = bloodborne | D:\Juegos\bloodborne_pc\Bloodborne.exe
+  CUSA00004 = interno
+  ```
+  El tipo dice cómo se le pasa el juego al programa: `spartanport`, `bloodborne`, `uncharted`, `shadps4-release` (un build de shadPS4 que lee `shadps4-game.txt`), `shadps4` (cualquier shadPS4 que acepte `--game`) o `interno`, que deja el juego en el motor de brunoShadPs4. Una línea de `motores.ini` manda sobre la asociación automática.
+- La serie del juego está en su `sce_sys\param.sfo` y suele venir en el nombre de la carpeta o en las listas de juegos de PS4.
+
+### Con RetroBat
+
+1. En `RetroBat\emulators\shadps4\`, guarda una copia del `shadPS4.exe` que haya y pon en su lugar el de esta versión. Copia al lado la carpeta `motores` (y `motores.ini` si lo usas).
+2. Deja tus juegos en `RetroBat\roms\ps4` como siempre. RetroBat los abre con shadPS4, y brunoShadPs4 los pasa a su motor con la pantalla de resolución, que se maneja con el mando.
+3. **Select + Start** cierra el juego entero, port incluido, y vuelves a RetroBat.
+4. Cada port guarda sus partidas en `motores\<motor>\user\savedata`, aparte de las de shadPS4. Para seguir una partida de shadPS4 en un port hay que copiarla allí (el formato de carpetas del port es un poco distinto).
 
 ### El lanzador
 

@@ -1,18 +1,28 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <cstdio>
 #include <fstream>
 #include <map>
+#include <mutex>
 #include <regex>
+#include <set>
 #include <sstream>
+#include <thread>
 #include <vector>
 #include <SDL3/SDL.h>
+#include <fmt/format.h>
+#include <httplib.h>
 #include <nlohmann/json.hpp>
 
 #include "common/external_engines.h"
 #include "common/logging/log.h"
 #include "common/path_util.h"
+#include "common/scm_rev.h"
+#include "common/thread.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -29,23 +39,33 @@ struct Engine {
 };
 
 std::string Trim(std::string s) {
-    const auto first = s.find_first_not_of(" \t\r");
+    const auto first = s.find_first_not_of(" \t\r\n");
     if (first == std::string::npos) {
         return {};
     }
-    const auto last = s.find_last_not_of(" \t\r");
+    const auto last = s.find_last_not_of(" \t\r\n");
     return s.substr(first, last - first + 1);
 }
 
-std::filesystem::path ExecutableFolder() {
+std::string ToLower(std::string s) {
+    std::ranges::transform(s, s.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
+}
+
+std::filesystem::path ExecutablePath() {
 #ifdef _WIN32
     wchar_t path[MAX_PATH]{};
     GetModuleFileNameW(nullptr, path, MAX_PATH);
-    return std::filesystem::path{path}.parent_path();
+    return std::filesystem::path{path};
 #else
     std::error_code ec;
-    return std::filesystem::read_symlink("/proc/self/exe", ec).parent_path();
+    return std::filesystem::read_symlink("/proc/self/exe", ec);
 #endif
+}
+
+std::filesystem::path ExecutableFolder() {
+    return ExecutablePath().parent_path();
 }
 
 /// "CUSA01623,CUSA01715 = spartanport | motores\SpartanPort\SpartanPort.exe"
@@ -85,27 +105,64 @@ std::map<std::string, Engine> LoadTable(const std::filesystem::path& folder) {
     return table;
 }
 
-/// The engine of a game and its program's full path, if the game has one and the program is there.
-std::optional<std::pair<Engine, std::filesystem::path>> FindEngine(const std::string& serial) {
+std::filesystem::path ResolveProgramPath(const std::filesystem::path& folder,
+                                         const std::filesystem::path& configured) {
+    if (configured.is_absolute()) {
+        return configured;
+    }
+    std::error_code ec;
+    const auto direct = folder / configured;
+    if (std::filesystem::exists(direct, ec)) {
+        return direct;
+    }
+    // When running directly from a build worktree (e.g. brunoShadPs4_main/build/shadps4.exe),
+    // check if `motores` sits in the workspace root two levels up.
+    if (folder.has_parent_path() && folder.parent_path().has_parent_path()) {
+        const auto root = folder.parent_path().parent_path();
+        const auto up_two = root / configured;
+        if (std::filesystem::exists(up_two, ec)) {
+            return up_two;
+        }
+        if (!std::filesystem::exists(folder / "motores", ec) &&
+            std::filesystem::exists(root / "motores", ec)) {
+            return up_two;
+        }
+    }
+    return direct;
+}
+
+/// The configured external engine of a game and its resolved program path, even if not yet
+/// downloaded on disk. Returns std::nullopt for games that run on the internal engine ("interno").
+std::optional<std::pair<Engine, std::filesystem::path>> FindConfiguredEngine(
+    const std::string& serial) {
     if (serial.empty()) {
         return std::nullopt;
     }
     const auto folder = ExecutableFolder();
     const auto table = LoadTable(folder);
     const auto it = table.find(serial);
-    if (it == table.end() || it->second.kind == "interno") {
+    if (it == table.end() || it->second.kind == "interno" || it->second.program.empty()) {
         return std::nullopt;
     }
-    const auto program =
-        it->second.program.is_absolute() ? it->second.program : folder / it->second.program;
+    return std::make_pair(it->second, ResolveProgramPath(folder, it->second.program));
+}
+
+/// The engine of a game and its program's full path, if the game has one and the program is there.
+std::optional<std::pair<Engine, std::filesystem::path>> FindEngine(const std::string& serial) {
+    const auto configured = FindConfiguredEngine(serial);
+    if (!configured) {
+        return std::nullopt;
+    }
     std::error_code ec;
-    if (!std::filesystem::exists(program, ec)) {
+    if (!std::filesystem::exists(configured->second, ec)) {
         return std::nullopt;
     }
-    return std::make_pair(it->second, program);
+    return configured;
 }
 
 bool WriteText(const std::filesystem::path& path, const std::string& text) {
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
     std::ofstream out{path, std::ios::binary | std::ios::trunc};
     out << text;
     return static_cast<bool>(out);
@@ -153,20 +210,136 @@ std::string EngineName(const Engine& engine, const std::filesystem::path& progra
     if (engine.kind == "bloodborne") {
         return "bloodborne_pc";
     }
+    if (engine.kind == "shadps4-release") {
+        return "shadPS4";
+    }
     return FS::PathToUTF8String(program.stem());
 }
 
-/// "2.7.0" from the first lines of the program's README (the ports name their version there).
-std::string EngineVersion(const std::filesystem::path& folder) {
-    static const std::regex version{R"((\d+\.\d+\.\d+))"};
+std::string EngineGitHubRepo(const Engine& engine, const std::filesystem::path& program) {
+    if (engine.kind == "spartanport") {
+        return "FelipePrado0/SpartanPort";
+    }
+    if (engine.kind == "shadps4-release") {
+        return "axylpup/shadPS4";
+    }
+    if (engine.kind == "issn") {
+        return "Liondarkz/issn_pc";
+    }
+    if (engine.kind == "uncharted") {
+        return "bc160201983/Uncharted-The-Nathan-Drake-Collection-PC-port";
+    }
+    if (engine.kind == "bloodborne") {
+        return "Supermedo/bloodborne_pc";
+    }
+    if (engine.kind == "shadps4") {
+        const auto lower = ToLower(FS::PathToUTF8String(program));
+        if (lower.find("infamous") != std::string::npos ||
+            lower.find("secondson") != std::string::npos) {
+            return "axylpup/shadPS4";
+        }
+        return "shadps4-emu/shadPS4";
+    }
+    return "serbru20066666/brunoShadPs4";
+}
+
+std::string CleanEmulatorVersion() {
+    std::string ver{Common::g_version};
+    if (const auto wip = ver.find(" WIP"); wip != std::string::npos) {
+        ver.erase(wip);
+    }
+    return Trim(ver);
+}
+
+std::mutex g_version_cache_mutex;
+std::map<std::filesystem::path, std::pair<std::filesystem::file_time_type, std::string>>
+    g_version_cache;
+
+void InvalidateVersionCache(const std::filesystem::path& program) {
+    std::scoped_lock lock{g_version_cache_mutex};
+    g_version_cache.erase(program);
+}
+
+/// Extracts a version string from the executable binary itself (axylpup's ReleaseTag or a
+/// PyInstaller launcher's embedded VERSION constant).
+std::string InspectExecutableVersion(const std::filesystem::path& program) {
+    std::error_code ec;
+    if (!std::filesystem::exists(program, ec)) {
+        return {};
+    }
+    const auto mtime = std::filesystem::last_write_time(program, ec);
+    {
+        std::scoped_lock lock{g_version_cache_mutex};
+        if (const auto it = g_version_cache.find(program);
+            it != g_version_cache.end() && it->second.first == mtime) {
+            return it->second.second;
+        }
+    }
+
+    std::string found_version;
+    std::ifstream file{program, std::ios::binary | std::ios::ate};
+    if (file) {
+        const auto total_size = static_cast<size_t>(file.tellg());
+        file.seekg(0, std::ios::beg);
+        std::vector<char> data(total_size);
+        if (file.read(data.data(), static_cast<std::streamsize>(total_size))) {
+            const std::string_view view{data.data(), data.size()};
+            static const std::regex ver_re{R"((\d+\.\d+(?:\.\d+)*))"};
+
+            // 1. axylpup/shadPS4 embeds "second-son-v1.1.1" in .rdata.
+            if (const auto pos = view.find("second-son-v"); pos != std::string_view::npos) {
+                const std::string sub{view.substr(pos + 12, std::min<size_t>(24, view.size() - pos - 12))};
+                if (std::smatch m; std::regex_search(sub, m, ver_re)) {
+                    found_version = m[1].str();
+                }
+            }
+
+            // 2. PyInstaller ports (SpartanPort, Bloodborne, issn_pc, Uncharted) can store
+            //    embedded version strings or release identifiers in the binary.
+            if (found_version.empty()) {
+                static const std::regex sp_re{R"(SpartanPort\s+(\d+\.\d+(?:\.\d+)*))"};
+                const std::string s_view{data.begin(), data.end()};
+                if (std::smatch m; std::regex_search(s_view, m, sp_re)) {
+                    found_version = m[1].str();
+                }
+            }
+        }
+    }
+
+    if (!found_version.empty()) {
+        // Persist VERSION beside the executable so subsequent startups read it immediately.
+        const auto version_file = program.parent_path() / "VERSION";
+        if (!std::filesystem::exists(version_file, ec)) {
+            WriteText(version_file, found_version + "\n");
+        }
+    }
+
+    {
+        std::scoped_lock lock{g_version_cache_mutex};
+        g_version_cache[program] = {mtime, found_version};
+    }
+    return found_version;
+}
+
+/// Reads the installed version of a fork/port from VERSION, README, executable metadata or folder name.
+std::string EngineVersion(const std::filesystem::path& program) {
+    const auto folder = program.parent_path();
+    static const std::regex version{R"((\d+\.\d+(?:\.\d+)*))"};
     for (const char* name : {"VERSION", "README-Windows.txt", "README.txt"}) {
         std::ifstream in{folder / name};
         std::string line;
-        for (int i = 0; i < 3 && std::getline(in, line); ++i) {
+        for (int i = 0; i < 5 && std::getline(in, line); ++i) {
             if (std::smatch found; std::regex_search(line, found, version)) {
                 return found[1].str();
             }
         }
+    }
+    if (const auto from_exe = InspectExecutableVersion(program); !from_exe.empty()) {
+        return from_exe;
+    }
+    const std::string folder_name = FS::PathToUTF8String(folder.filename());
+    if (std::smatch found; std::regex_search(folder_name, found, version)) {
+        return found[1].str();
     }
     return {};
 }
@@ -370,7 +543,7 @@ struct Splash {
         MSG msg;
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+            DispatchMessage(&msg);
         }
     }
 
@@ -765,6 +938,288 @@ std::optional<std::string> ChooseResolution(const std::string& title, const std:
     return std::string{Resolutions[*choice]};
 }
 
+// ---------------------------------------------------------------------------
+// Official GitHub Release updater for each fork/port
+// ---------------------------------------------------------------------------
+
+std::mutex g_update_mutex;
+EngineUpdateStatus g_update_status;
+
+void ModifyUpdateStatus(const std::function<void(EngineUpdateStatus&)>& fn) {
+    std::scoped_lock lock{g_update_mutex};
+    fn(g_update_status);
+}
+
+std::array<int, 4> ParseVersionTuple(std::string_view text) {
+    std::array<int, 4> out{};
+    static const std::regex ver_re{R"((\d+\.\d+(?:\.\d+)*))"};
+    const std::string s{text};
+    std::smatch m;
+    if (!std::regex_search(s, m, ver_re)) {
+        return out;
+    }
+    std::stringstream ss{m[1].str()};
+    std::string part;
+    for (size_t i = 0; i < out.size() && std::getline(ss, part, '.'); ++i) {
+        out[i] = std::atoi(part.c_str());
+    }
+    return out;
+}
+
+std::string ExtractVersionString(const std::string& tag, const std::string& name) {
+    static const std::regex ver_re{R"((\d+\.\d+(?:\.\d+)*))"};
+    std::smatch m;
+    if (std::regex_search(tag, m, ver_re)) {
+        return m[1].str();
+    }
+    if (std::regex_search(name, m, ver_re)) {
+        return m[1].str();
+    }
+    return tag;
+}
+
+bool SplitUrl(const std::string& url, std::string& base_url, std::string& path) {
+    const auto scheme_end = url.find("://");
+    if (scheme_end == std::string::npos) {
+        return false;
+    }
+    const auto host_start = scheme_end + 3;
+    const auto path_start = url.find('/', host_start);
+    if (path_start == std::string::npos) {
+        base_url = url;
+        path = "/";
+    } else {
+        base_url = url.substr(0, path_start);
+        path = url.substr(path_start);
+    }
+    return true;
+}
+
+void ConfigureHttpClient(httplib::Client& cli, int connect_sec, int read_sec) {
+    cli.set_connection_timeout(connect_sec);
+    cli.set_read_timeout(read_sec);
+    cli.set_follow_location(true);
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+    cli.enable_server_certificate_verification(false);
+#endif
+}
+
+std::string FetchUrlText(const std::string& url) {
+    std::string base, path;
+    if (SplitUrl(url, base, path)) {
+        httplib::Client cli(base);
+        ConfigureHttpClient(cli, 10, 20);
+        const httplib::Headers headers = {{"User-Agent", "brunoShadPs4"},
+                                          {"Accept", "application/vnd.github+json"}};
+        if (const auto res = cli.Get(path.c_str(), headers); res && res->status == 200) {
+            return res->body;
+        }
+    }
+#ifdef _WIN32
+    // Fallback to Windows built-in curl.exe if LibreSSL/httplib is blocked by local certs/proxy.
+    const auto tmp = std::filesystem::temp_directory_path() / "brunoshadps4_release.json";
+    std::error_code ec;
+    std::filesystem::remove(tmp, ec);
+    std::wstring cmd =
+        L"curl.exe -fsSL -H \"User-Agent: brunoShadPs4\" -o \"" + tmp.wstring() + L"\" \"" +
+        std::filesystem::path{url}.wstring() + L"\"";
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    if (CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
+                       nullptr, &si, &pi)) {
+        WaitForSingleObject(pi.hProcess, 25000);
+        DWORD exit_code = 1;
+        GetExitCodeProcess(pi.hProcess, &exit_code);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        if (exit_code == 0) {
+            std::ifstream in{tmp, std::ios::binary};
+            std::ostringstream ss;
+            ss << in.rdbuf();
+            std::filesystem::remove(tmp, ec);
+            return ss.str();
+        }
+    }
+#endif
+    return {};
+}
+
+bool DownloadFileWithProgress(const std::string& url, const std::filesystem::path& dest,
+                              const std::string& asset_name, uint64_t expected_size) {
+    std::error_code ec;
+    std::filesystem::create_directories(dest.parent_path(), ec);
+    std::string base, path;
+    if (SplitUrl(url, base, path)) {
+        std::ofstream out{dest, std::ios::binary | std::ios::trunc};
+        if (out) {
+            httplib::Client cli(base);
+            ConfigureHttpClient(cli, 15, 120);
+            const httplib::Headers headers = {{"User-Agent", "brunoShadPs4"},
+                                              {"Accept", "application/octet-stream"}};
+            uint64_t received = 0;
+            const auto res = cli.Get(
+                path.c_str(), headers,
+                [&](const char* data, size_t len) {
+                    out.write(data, static_cast<std::streamsize>(len));
+                    received += len;
+                    const uint64_t total = std::max<uint64_t>(expected_size, received);
+                    const float ratio =
+                        total > 0 ? static_cast<float>(received) / static_cast<float>(total) : 0.0f;
+                    ModifyUpdateStatus([&](EngineUpdateStatus& st) {
+                        st.progress = std::clamp(ratio * 0.80f, 0.01f, 0.80f);
+                        st.message = fmt::format("Descargando {} ({:.1f} / {:.1f} MB)...",
+                                                 asset_name, received / (1024.0 * 1024.0),
+                                                 total / (1024.0 * 1024.0));
+                    });
+                    return static_cast<bool>(out);
+                });
+            out.close();
+            if (res && res->status == 200 && std::filesystem::file_size(dest, ec) > 1024) {
+                return true;
+            }
+        }
+    }
+#ifdef _WIN32
+    ModifyUpdateStatus([&](EngineUpdateStatus& st) {
+        st.progress = -1.0f;
+        st.message = fmt::format("Descargando {}...", asset_name);
+    });
+    std::wstring cmd = L"curl.exe -fL -H \"User-Agent: brunoShadPs4\" -o \"" + dest.wstring() +
+                       L"\" \"" + std::filesystem::path{url}.wstring() + L"\"";
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    if (CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
+                       nullptr, &si, &pi)) {
+        WaitForSingleObject(pi.hProcess, 300000);
+        DWORD exit_code = 1;
+        GetExitCodeProcess(pi.hProcess, &exit_code);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        if (exit_code == 0 && std::filesystem::file_size(dest, ec) > 1024) {
+            return true;
+        }
+    }
+#endif
+    return false;
+}
+
+FILE* OpenFileWide(const std::filesystem::path& path, const wchar_t* mode) {
+#ifdef _WIN32
+    return _wfopen(path.c_str(), mode);
+#else
+    const std::string m = mode[0] == L'w' ? "wb" : "rb";
+    return std::fopen(path.string().c_str(), m.c_str());
+#endif
+}
+
+bool ExtractZipArchive(const std::filesystem::path& zip_path,
+                       const std::filesystem::path& target_dir, bool is_internal_self) {
+    std::error_code ec;
+    std::filesystem::create_directories(target_dir, ec);
+
+    // User files/directories that an update must never overwrite if they already exist.
+    static const std::set<std::string> preserved_names = {
+        "user",
+        "out",
+        "mods",
+        "fsr4vk",
+        "spartanport.ini",
+        "gow3.ini",
+        "bbport.ini",
+        "issn.ini",
+        "settings.json",
+        "mods.json",
+        "mods_presets.json",
+        "patches.json",
+        "last_run.log",
+        "shadps4-flags-user.txt",
+        "shadps4-game.txt",
+        "brunoshadps4.env",
+        "motores.ini",
+        "juego.ini",
+    };
+
+    const auto extract_tmp = target_dir / ".extract_tmp";
+    std::filesystem::remove_all(extract_tmp, ec);
+    std::filesystem::create_directories(extract_tmp, ec);
+
+    // Windows native tar extracts .zip archives directly.
+    std::wstring cmd = L"tar.exe -xf \"" + zip_path.wstring() + L"\" -C \"" +
+                       extract_tmp.wstring() + L"\"";
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
+                        nullptr, &si, &pi)) {
+        LOG_ERROR(Common, "ExtractZipArchive: could not run tar.exe");
+        std::filesystem::remove_all(extract_tmp, ec);
+        return false;
+    }
+    WaitForSingleObject(pi.hProcess, 180000);
+    DWORD code = 1;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    if (code != 0) {
+        LOG_ERROR(Common, "ExtractZipArchive: tar.exe exited with {}", code);
+        std::filesystem::remove_all(extract_tmp, ec);
+        return false;
+    }
+
+    // Check if the zip had a single wrapper directory (e.g. spartanport-windows/...)
+    std::filesystem::path source_root = extract_tmp;
+    std::vector<std::filesystem::path> top_entries;
+    for (const auto& entry : std::filesystem::directory_iterator(extract_tmp, ec)) {
+        top_entries.push_back(entry.path());
+    }
+    if (top_entries.size() == 1 && std::filesystem::is_directory(top_entries[0], ec)) {
+        source_root = top_entries[0];
+    }
+
+    const auto own_exe = ExecutablePath();
+
+    // Copy files into target_dir preserving user saves and configs.
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(source_root, ec)) {
+        const auto rel = std::filesystem::relative(entry.path(), source_root, ec);
+        const auto dest = target_dir / rel;
+
+        const auto first_part = ToLower(rel.begin()->string());
+        if (preserved_names.contains(first_part) &&
+            std::filesystem::exists(target_dir / *rel.begin(), ec)) {
+            continue;
+        }
+
+        if (entry.is_directory(ec)) {
+            std::filesystem::create_directories(dest, ec);
+            continue;
+        }
+
+        std::filesystem::create_directories(dest.parent_path(), ec);
+        if (is_internal_self && std::filesystem::equivalent(dest, own_exe, ec)) {
+            const auto old_exe = std::filesystem::path{own_exe}.replace_extension(".exe.old");
+            std::filesystem::remove(old_exe, ec);
+            std::filesystem::rename(own_exe, old_exe, ec);
+        }
+
+        std::filesystem::copy_file(entry.path(), dest,
+                                   std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec) {
+            const auto bak = std::filesystem::path{dest}.concat(".old");
+            std::filesystem::remove(bak, ec);
+            std::filesystem::rename(dest, bak, ec);
+            ec.clear();
+            std::filesystem::copy_file(entry.path(), dest,
+                                       std::filesystem::copy_options::overwrite_existing, ec);
+        }
+    }
+
+    std::filesystem::remove_all(extract_tmp, ec);
+    return true;
+}
+
 } // namespace
 
 std::string ExternalEngineResolution(const std::string& serial) {
@@ -836,24 +1291,236 @@ std::string CycleExternalEngineResolution(const std::string& serial) {
 }
 
 std::optional<ExternalEngineCard> DescribeExternalEngine(const std::string& serial) {
-    const auto found = FindEngine(serial);
-    if (!found) {
+    const auto configured = FindConfiguredEngine(serial);
+    if (!configured) {
         return std::nullopt;
     }
-    const auto& [engine, program] = *found;
+    const auto& [engine, program] = *configured;
+    std::error_code ec;
+    const bool exists = std::filesystem::exists(program, ec);
     ExternalEngineCard card;
-    const auto version = EngineVersion(program.parent_path());
-    card.engine = EngineName(engine, program) + (version.empty() ? "" : " " + version);
-    if (engine.kind == "spartanport" || engine.kind == "issn" || engine.kind == "bloodborne") {
-        card.details = LastRunDetails(program.parent_path());
-    } else if (engine.kind == "uncharted") {
-        card.details = UnchartedDetails();
-    } else if (engine.kind == "shadps4-release") {
-        card.details = ReleaseBuildDetails(program.parent_path());
+    card.installed = exists;
+    if (exists) {
+        card.version = EngineVersion(program);
+        card.engine = EngineName(engine, program) + (card.version.empty() ? "" : " " + card.version);
+        if (engine.kind == "spartanport" || engine.kind == "issn" || engine.kind == "bloodborne") {
+            card.details = LastRunDetails(program.parent_path());
+        } else if (engine.kind == "uncharted") {
+            card.details = UnchartedDetails();
+        } else if (engine.kind == "shadps4-release") {
+            card.details = ReleaseBuildDetails(program.parent_path());
+        } else {
+            card.details[0] = "Ajustes: en su propio programa";
+        }
     } else {
-        card.details[0] = "Ajustes: en su propio programa";
+        card.version = {};
+        card.engine = EngineName(engine, program) + " (sin instalar)";
+        card.details[0] = "Pulsa Actualizar para instalarlo";
+        card.details[1] = "Repositorio: " + EngineGitHubRepo(engine, program);
     }
     return card;
+}
+
+EngineUpdateStatus GetEngineUpdateStatus() {
+    std::scoped_lock lock{g_update_mutex};
+    return g_update_status;
+}
+
+void ClearEngineUpdateStatus() {
+    std::scoped_lock lock{g_update_mutex};
+    if (!g_update_status.active) {
+        g_update_status = {};
+    }
+}
+
+void StartEngineUpdate(const std::string& serial, bool force_reinstall) {
+    {
+        std::scoped_lock lock{g_update_mutex};
+        if (g_update_status.active) {
+            return;
+        }
+    }
+
+    const auto configured = FindConfiguredEngine(serial);
+    const bool is_external = configured.has_value();
+    const Engine engine = is_external ? configured->first : Engine{"interno", ExecutablePath()};
+    const std::filesystem::path program = is_external ? configured->second : ExecutablePath();
+    const std::filesystem::path target_dir = program.parent_path();
+    const std::string engine_name =
+        is_external ? EngineName(engine, program) : std::string{"brunoShadPs4"};
+    const std::string repo = EngineGitHubRepo(engine, program);
+
+    std::error_code ec;
+    const bool installed = std::filesystem::exists(program, ec);
+    const std::string installed_ver =
+        is_external ? (installed ? EngineVersion(program) : std::string{}) : CleanEmulatorVersion();
+
+    ModifyUpdateStatus([&](EngineUpdateStatus& st) {
+        st = {};
+        st.active = true;
+        st.progress = -1.0f;
+        st.serial = serial;
+        st.engine_name = engine_name;
+        st.repo = repo;
+        st.installed_version = installed_ver;
+        st.message = fmt::format("Consultando última versión en GitHub ({})...", repo);
+    });
+
+    std::thread([=] {
+        SetCurrentThreadName("EngineUpdater");
+        const std::string api_url = "https://api.github.com/repos/" + repo + "/releases/latest";
+        const std::string body = FetchUrlText(api_url);
+        if (body.empty()) {
+            ModifyUpdateStatus([&](EngineUpdateStatus& st) {
+                st.active = false;
+                st.finished = true;
+                st.success = false;
+                st.message = fmt::format("No se pudo conectar con GitHub ({}).", repo);
+            });
+            return;
+        }
+
+        const auto json = nlohmann::json::parse(body, nullptr, false);
+        if (json.is_discarded() || !json.contains("tag_name") || !json["tag_name"].is_string()) {
+            ModifyUpdateStatus([&](EngineUpdateStatus& st) {
+                st.active = false;
+                st.finished = true;
+                st.success = false;
+                st.message = "Respuesta inesperada de la API de GitHub.";
+            });
+            return;
+        }
+
+        const std::string tag_name = json.value("tag_name", std::string{});
+        const std::string rel_name = json.value("name", std::string{});
+        const std::string latest_ver = ExtractVersionString(tag_name, rel_name);
+
+        ModifyUpdateStatus([&](EngineUpdateStatus& st) { st.latest_version = latest_ver; });
+
+        if (installed && !force_reinstall && !installed_ver.empty() && !latest_ver.empty() &&
+            ParseVersionTuple(installed_ver) >= ParseVersionTuple(latest_ver)) {
+            if (is_external) {
+                WriteText(target_dir / "VERSION", installed_ver + "\n");
+                InvalidateVersionCache(program);
+            }
+            ModifyUpdateStatus([&](EngineUpdateStatus& st) {
+                st.active = false;
+                st.finished = true;
+                st.success = true;
+                st.up_to_date = true;
+                st.progress = 1.0f;
+                st.message = fmt::format("{} ya está en la última versión ({}).", engine_name,
+                                         installed_ver);
+            });
+            return;
+        }
+
+        std::string best_url;
+        std::string best_name;
+        uint64_t best_size = 0;
+        int best_score = -1;
+
+        if (json.contains("assets") && json["assets"].is_array()) {
+            for (const auto& asset : json["assets"]) {
+                const std::string name = asset.value("name", std::string{});
+                const std::string url = asset.value("browser_download_url", std::string{});
+                const std::string lower = ToLower(name);
+                if (url.empty() || !lower.ends_with(".zip")) {
+                    continue;
+                }
+                if (lower.find("src") != std::string::npos ||
+                    lower.find("source") != std::string::npos ||
+                    lower.find("macos") != std::string::npos ||
+                    lower.find("linux") != std::string::npos ||
+                    lower.find("appimage") != std::string::npos) {
+                    continue;
+                }
+                int score = 1;
+                if (engine.kind == "interno") {
+                    if (lower.find("shadps4-win64") != std::string::npos) {
+                        score += 20;
+                    }
+                } else {
+                    if (lower.find("windows") != std::string::npos ||
+                        lower.find("win64") != std::string::npos ||
+                        lower.find("win") != std::string::npos) {
+                        score += 10;
+                    }
+                    if (lower.find(ToLower(engine.kind)) != std::string::npos) {
+                        score += 5;
+                    }
+                }
+                if (score > best_score) {
+                    best_score = score;
+                    best_url = url;
+                    best_name = name;
+                    best_size = asset.value("size", uint64_t{0});
+                }
+            }
+        }
+
+        if (best_url.empty()) {
+            ModifyUpdateStatus([&](EngineUpdateStatus& st) {
+                st.active = false;
+                st.finished = true;
+                st.success = false;
+                st.message = fmt::format(
+                    "No se encontró un paquete .zip de Windows en el release {}.", latest_ver);
+            });
+            return;
+        }
+
+        std::error_code zip_ec;
+        std::filesystem::create_directories(target_dir, zip_ec);
+        const auto temp_zip = target_dir / ".brunoshadps4_update.zip";
+        std::filesystem::remove(temp_zip, zip_ec);
+
+        if (!DownloadFileWithProgress(best_url, temp_zip, best_name, best_size)) {
+            std::filesystem::remove(temp_zip, zip_ec);
+            ModifyUpdateStatus([&](EngineUpdateStatus& st) {
+                st.active = false;
+                st.finished = true;
+                st.success = false;
+                st.message = fmt::format("Error al descargar {}.", best_name);
+            });
+            return;
+        }
+
+        ModifyUpdateStatus([&](EngineUpdateStatus& st) {
+            st.progress = 0.80f;
+            st.message = fmt::format("Descomprimiendo {}...", best_name);
+        });
+
+        const bool extracted = ExtractZipArchive(temp_zip, target_dir, !is_external);
+        std::filesystem::remove(temp_zip, zip_ec);
+
+        if (!extracted) {
+            ModifyUpdateStatus([&](EngineUpdateStatus& st) {
+                st.active = false;
+                st.finished = true;
+                st.success = false;
+                st.message = fmt::format("Error al descomprimir {} en {}.", best_name,
+                                         FS::PathToUTF8String(target_dir));
+            });
+            return;
+        }
+
+        if (is_external && !latest_ver.empty()) {
+            WriteText(target_dir / "VERSION", latest_ver + "\n");
+            InvalidateVersionCache(program);
+        }
+
+        ModifyUpdateStatus([&](EngineUpdateStatus& st) {
+            st.active = false;
+            st.finished = true;
+            st.success = true;
+            st.up_to_date = false;
+            st.progress = 1.0f;
+            st.installed_version = latest_ver;
+            st.message = fmt::format("{} actualizado correctamente a la versión {}.", engine_name,
+                                     latest_ver);
+        });
+    }).detach();
 }
 
 bool LaunchExternalEngine(const std::string& serial, const std::string& title,
