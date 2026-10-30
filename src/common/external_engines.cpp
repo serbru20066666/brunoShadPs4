@@ -109,13 +109,29 @@ std::map<std::string, Engine> LoadTable(const std::filesystem::path& folder) {
 
 std::filesystem::path ResolveProgramPath(const std::filesystem::path& folder,
                                          const std::filesystem::path& configured) {
-    if (configured.is_absolute()) {
-        return configured;
-    }
     std::error_code ec;
-    const auto direct = folder / configured;
-    if (std::filesystem::exists(direct, ec)) {
-        return direct;
+    // When configured is absolute, check if the emulator folder itself contains the engine
+    // (e.g. user copied a motores.ini containing hardcoded paths from another machine or path).
+    // The local installation in RetroBat or a portable folder must always take priority!
+    if (configured.is_absolute()) {
+        const auto file_name = configured.filename();
+        const auto parent_name = configured.parent_path().filename();
+        const auto local_sub = folder / "motores" / parent_name / file_name;
+        if (std::filesystem::exists(local_sub, ec)) {
+            return local_sub;
+        }
+        const auto local_direct = folder / "motores" / file_name;
+        if (std::filesystem::exists(local_direct, ec)) {
+            return local_direct;
+        }
+        if (std::filesystem::exists(configured, ec)) {
+            return configured;
+        }
+    } else {
+        const auto direct = folder / configured;
+        if (std::filesystem::exists(direct, ec)) {
+            return direct;
+        }
     }
     // When running directly from a build worktree (e.g. brunoShadPs4_main/build/shadps4.exe),
     // check if `motores` sits in the workspace root two levels up.
@@ -130,7 +146,7 @@ std::filesystem::path ResolveProgramPath(const std::filesystem::path& folder,
             return up_two;
         }
     }
-    return direct;
+    return folder / configured;
 }
 
 /// The configured external engine of a game and its resolved program path, even if not yet
@@ -1544,6 +1560,109 @@ void StartEngineUpdate(const std::string& serial, bool force_reinstall) {
     }).detach();
 }
 
+/// Synchronizes saved games between shadPS4 / RetroBat (home_dir / 1000 / savedata) and the port's
+/// user directory (program_folder / user / savedata / 1 / serial), ensuring that saves are never
+/// lost or disassociated regardless of how or where the game is launched.
+std::filesystem::path GetConfiguredHomeDir() {
+    const auto user_dir = Common::FS::GetUserPath(Common::FS::PathType::UserDir);
+    const auto config = ReadJsonFile(user_dir / "config.json");
+    if (config.contains("General") && config["General"].contains("home_dir")) {
+        const std::string h = config["General"]["home_dir"].get<std::string>();
+        if (!h.empty()) {
+            return std::filesystem::path{h};
+        }
+    }
+    return Common::FS::GetUserPath(Common::FS::PathType::HomeDir);
+}
+
+void SyncDirectoryFiles(const std::filesystem::path& from, const std::filesystem::path& to) {
+    std::error_code ec;
+    if (!std::filesystem::exists(from, ec) || !std::filesystem::is_directory(from, ec)) {
+        return;
+    }
+    std::filesystem::create_directories(to, ec);
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(from, ec)) {
+        if (ec) {
+            break;
+        }
+        const auto rel = std::filesystem::relative(entry.path(), from, ec);
+        if (ec) {
+            continue;
+        }
+        const auto target = to / rel;
+        if (entry.is_directory(ec)) {
+            std::filesystem::create_directories(target, ec);
+        } else if (entry.is_regular_file(ec)) {
+            if (!std::filesystem::exists(target, ec)) {
+                std::filesystem::create_directories(target.parent_path(), ec);
+                std::filesystem::copy_file(entry.path(), target,
+                                           std::filesystem::copy_options::overwrite_existing, ec);
+                const auto t = std::filesystem::last_write_time(entry.path(), ec);
+                if (!ec) {
+                    std::filesystem::last_write_time(target, t, ec);
+                }
+            } else {
+                const auto t_src = std::filesystem::last_write_time(entry.path(), ec);
+                const auto t_dst = std::filesystem::last_write_time(target, ec);
+                if (!ec && t_src > t_dst) {
+                    std::filesystem::copy_file(entry.path(), target,
+                                               std::filesystem::copy_options::overwrite_existing,
+                                               ec);
+                    std::filesystem::last_write_time(target, t_src, ec);
+                }
+            }
+        }
+    }
+}
+
+void SyncGameSaves(const std::string& serial, const std::filesystem::path& program_folder) {
+    if (serial.empty()) {
+        return;
+    }
+
+    const auto home_dir = GetConfiguredHomeDir();
+    const auto user_dir = Common::FS::GetUserPath(Common::FS::PathType::UserDir);
+    const auto default_home = Common::FS::GetUserPath(Common::FS::PathType::HomeDir);
+
+    const std::vector<std::filesystem::path> main_locations{
+        home_dir / "1000" / "savedata" / serial,
+        home_dir / "savedata" / serial,
+        user_dir / "savedata" / "1" / serial,
+        user_dir / "savedata" / serial,
+        user_dir / "home" / "1000" / "savedata" / serial,
+        default_home / "1000" / "savedata" / serial,
+        default_home / "savedata" / serial,
+    };
+
+    const auto ext_user = program_folder / "user";
+    const std::vector<std::filesystem::path> engine_locations{
+        ext_user / "savedata" / "1" / serial,
+        ext_user / "savedata" / "1000" / serial,
+        ext_user / "home" / "1000" / "savedata" / serial,
+        ext_user / "savedata" / serial,
+    };
+
+    // Propagate from main emulator locations to external engine
+    for (const auto& m : main_locations) {
+        std::error_code ec;
+        if (std::filesystem::exists(m, ec) && !std::filesystem::is_empty(m, ec)) {
+            for (const auto& e : engine_locations) {
+                SyncDirectoryFiles(m, e);
+            }
+        }
+    }
+
+    // Propagate from external engine to main emulator locations
+    for (const auto& e : engine_locations) {
+        std::error_code ec;
+        if (std::filesystem::exists(e, ec) && !std::filesystem::is_empty(e, ec)) {
+            for (const auto& m : main_locations) {
+                SyncDirectoryFiles(e, m);
+            }
+        }
+    }
+}
+
 bool LaunchExternalEngine(const std::string& serial, const std::string& title,
                           const std::filesystem::path& eboot) {
     if (serial.empty()) {
@@ -1697,8 +1816,12 @@ bool LaunchExternalEngine(const std::string& serial, const std::string& title,
         return false;
     }
     LOG_INFO(Common, "{} runs on {} ({})", serial, FS::PathToUTF8String(program), engine.kind);
+    SyncGameSaves(serial, program_folder);
 #ifdef _WIN32
-    return StartAndWait(program, args, title.empty() ? serial : title, EngineName(engine, program));
+    const bool success =
+        StartAndWait(program, args, title.empty() ? serial : title, EngineName(engine, program));
+    SyncGameSaves(serial, program_folder);
+    return success;
 #else
     LOG_ERROR(Common, "Other programs for a game are only started on Windows");
     return false;
